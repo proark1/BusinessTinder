@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>BusinessTinder</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="manifest" href="manifest.webmanifest" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar glass">
+        <h1>BusinessTinder</h1>
+        <span id="completionBadge" class="completion">0% profile</span>
+        <button id="resetBtn" class="ghost" aria-label="Reset demo">Reset</button>
+      </header>
+
+      <main>
+        <section id="view-onboarding" class="view active glass pad">
+          <h2>Build your business profile</h2>
+          <form id="onboardingForm" class="form-grid">
+            <label>Name<input required name="name" placeholder="Avery Chen" /></label>
+            <label>Role<input required name="role" placeholder="Founder · FinOps" /></label>
+            <label>Bio<textarea required name="bio" rows="3" placeholder="What are you building?"></textarea></label>
+            <label>Interests<input required name="interests" placeholder="AI, SaaS, FinTech" /></label>
+            <label>Goal<input required name="goal" placeholder="Looking for pilot customers" /></label>
+            <label>Location<input required name="location" placeholder="NYC / Remote" /></label>
+            <button type="submit" class="primary" id="profileSubmitBtn">Start Matching</button>
+            <p id="profileSavedMsg" class="hint" aria-live="polite"></p>
+            <div class="row-actions">
+              <button type="button" id="exportBtn">Export Data</button>
+              <button type="button" id="importBtn">Import Data</button>
+              <input type="file" id="importFile" accept="application/json" hidden />
+            </div>
+
+          </form>
+        </section>
+
+        <section id="view-swipe" class="view">
+          <div class="filters glass pad-sm">
+            <label>Industry
+              <select id="industryFilter">
+                <option value="all">All</option>
+                <option value="AI">AI</option>
+                <option value="HealthTech">HealthTech</option>
+                <option value="Climate">Climate</option>
+                <option value="Growth">Growth</option>
+              </select>
+            </label>
+          </div>
+          <section id="deck" class="deck" aria-live="polite" tabindex="0" aria-label="Swipe deck. Use left and right arrow keys to swipe."></section>
+          <section class="actions">
+            <button class="action left" id="leftBtn" aria-label="Pass">✕</button>
+            <button class="action right" id="rightBtn" aria-label="Like">❤</button>
+            <button class="action undo" id="undoBtn" aria-label="Undo">↺</button>
+          </section>
+          <p id="statusText" class="status">Swipe to discover your next business match.</p>
+          <div id="matchToast" class="toast" aria-live="polite"></div>
+        </section>
+
+        <section id="view-matches" class="view glass pad">
+          <h2>Your Matches</h2>
+          <ul id="matchesList" class="list"></ul>
+          <p class='hint'>You can unmatch or report from each row.</p>
+        </section>
+
+        <section id="view-chat" class="view glass pad">
+          <h2 id="chatTitle">Chat</h2>
+          <div id="messages" class="messages"></div>
+          <form id="chatForm" class="chat-form">
+            <input id="chatInput" placeholder="Type a message" />
+            <button class="primary" type="submit">Send</button>
+          </form>
+        </section>
+      </main>
+
+      <nav class="tabbar glass">
+        <button data-view="onboarding" class="tab active">Profile</button>
+        <button data-view="swipe" class="tab">Discover</button>
+        <button data-view="matches" class="tab">Matches</button>
+        <button data-view="chat" class="tab">Chat</button>
+      </nav>
+    </div>
+
+    <template id="cardTemplate">
+      <article class="card">
+        <div class="badge"></div>
+        <img class="avatar" alt="" />
+        <div class="card-content">
+          <h2></h2>
+          <p class="role"></p>
+          <p class="meta"></p>
+          <p class="bio"></p>
+          <ul class="tags"></ul>
+          <p class="goal"></p>
+        </div>
+      </article>
+    </template>
+
+    <script src="script.js" type="module"></script>
+    <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");</script>
+  </body>
+</html>

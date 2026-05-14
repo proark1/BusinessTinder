@@ -1,8 +1,33 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const STATIC_ROOT = path.resolve(__dirname, '..');
+const STATIC_FILES = new Set([
+  '/',
+  '/index.html',
+  '/script.js',
+  '/styles.css',
+  '/manifest.webmanifest',
+  '/sw.js'
+]);
+const STATIC_DIRS = new Set(['/src/']);
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.webmanifest': 'application/manifest+json',
+  '.json': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon'
+};
 
 export function createServer(options = {}) {
   const dataFile = options.dataFile || process.env.BT_DB_FILE || null;
+  const staticRoot = options.staticRoot || STATIC_ROOT;
   const initialDb = {
     users: [],
     profiles: [],
@@ -57,6 +82,25 @@ export function createServer(options = {}) {
 
       if (req.method === 'GET' && url.pathname === '/health') {
         return json(res, 200, { ok: true });
+      }
+
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        const pathname = url.pathname;
+        const inStaticDir = [...STATIC_DIRS].some((d) => pathname.startsWith(d));
+        if (STATIC_FILES.has(pathname) || inStaticDir) {
+          const rel = pathname === '/' ? '/index.html' : pathname;
+          const filePath = path.join(staticRoot, rel);
+          if (filePath.startsWith(staticRoot) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+            const ext = path.extname(filePath).toLowerCase();
+            const headers = {
+              'Content-Type': MIME[ext] || 'application/octet-stream',
+              'Access-Control-Allow-Origin': '*'
+            };
+            res.writeHead(200, headers);
+            if (req.method === 'HEAD') return res.end();
+            return fs.createReadStream(filePath).pipe(res);
+          }
+        }
       }
 
       if (req.method === 'POST' && url.pathname === '/auth/signup') {

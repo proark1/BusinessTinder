@@ -16,7 +16,7 @@ const state = {
   me: JSON.parse(localStorage.getItem("bt_me") || "null"),
   activeChatId: null,
   reported: JSON.parse(localStorage.getItem("bt_reported") || "[]"),
-  industry: "all",
+  industry: localStorage.getItem("bt_industry") || "all",
   passed: JSON.parse(localStorage.getItem("bt_passed") || "[]"),
   swipeHistory: JSON.parse(localStorage.getItem("bt_swipe_history") || "[]")
 };
@@ -34,6 +34,7 @@ function persist() {
   localStorage.setItem("bt_reported", JSON.stringify(state.reported));
   localStorage.setItem("bt_passed", JSON.stringify(state.passed));
   localStorage.setItem("bt_swipe_history", JSON.stringify(state.swipeHistory));
+  localStorage.setItem("bt_industry", state.industry);
 }
 
 function show(viewName) {
@@ -137,7 +138,11 @@ function fling(direction) {
 
 function enableSwipe(card) {
   let startX = 0, dx = 0, dragging = false;
-  const down = (e) => { dragging = true; startX = e.clientX || 0; };
+  const down = (e) => {
+    dragging = true;
+    startX = e.clientX || 0;
+    if (card.setPointerCapture) card.setPointerCapture(e.pointerId);
+  };
   const move = (e) => {
     if (!dragging) return;
     dx = (e.clientX || 0) - startX;
@@ -147,16 +152,20 @@ function enableSwipe(card) {
     else if (dx < -35) { card.classList.add("pass"); card.classList.remove("like"); badge.textContent = "PASS"; }
     else { card.classList.remove("like", "pass"); badge.textContent = ""; }
   };
-  const up = () => {
+  const up = (e) => {
     if (!dragging) return;
     dragging = false;
+    if (card.releasePointerCapture && e && e.pointerId != null) {
+      try { card.releasePointerCapture(e.pointerId); } catch {}
+    }
     if (dx > 120) return fling("right");
     if (dx < -120) return fling("left");
     card.style.transform = "translateX(0)"; card.classList.remove("like", "pass");
   };
   card.addEventListener("pointerdown", down);
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
+  card.addEventListener("pointermove", move);
+  card.addEventListener("pointerup", up);
+  card.addEventListener("pointercancel", up);
 }
 
 function renderMatches() {
@@ -252,6 +261,8 @@ qs("chatForm").addEventListener("submit", (e) => {
 });
 
 renderCompletion();
+const industrySelect = qs("industryFilter");
+if (industrySelect) industrySelect.value = state.industry;
 renderDeck();
 renderMatches();
 if (state.me) show("swipe");
@@ -260,6 +271,7 @@ if (state.me) show("swipe");
 qs("industryFilter").addEventListener("change", (e) => {
   state.industry = e.target.value;
   state.index = 0;
+  persist();
   renderDeck();
 });
 
@@ -272,5 +284,6 @@ qs("resetBtn").addEventListener("click", () => {
   localStorage.removeItem("bt_reported");
   localStorage.removeItem("bt_passed");
   localStorage.removeItem("bt_swipe_history");
+  localStorage.removeItem("bt_industry");
   location.reload();
 });

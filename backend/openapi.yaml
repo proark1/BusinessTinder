@@ -1,0 +1,35 @@
+openapi: 3.0.3
+info:
+  title: BusinessTinder API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8787
+paths:
+  /health:
+    get:
+      responses:
+        '200': { description: OK }
+  /auth/signup:
+    post:
+      requestBody:
+        required: true
+      responses:
+        '201': { description: Created }
+  /auth/login:
+    post:
+      responses:
+        '200': { description: Authenticated }
+  /profiles:
+    get: { responses: { '200': { description: Profiles } } }
+    post: { responses: { '201': { description: Created } } }
+  /swipes:
+    post: { responses: { '201': { description: Swipe created } } }
+  /matches:
+    get: { responses: { '200': { description: Matches } } }
+  /messages:
+    get: { responses: { '200': { description: Messages } } }
+    post: { responses: { '201': { description: Message created } } }
+  /reports:
+    post: { responses: { '201': { description: Report created } } }
+  /blocks:
+    post: { responses: { '201': { description: Block created } } }

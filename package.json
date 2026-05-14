@@ -1,0 +1,9 @@
+{
+  "name": "business-tinder",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "start:api": "node backend/server.js"
+  }
+}

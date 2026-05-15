@@ -10,6 +10,7 @@ const matchesList = qs("matchesList");
 const savedList = qs("savedList");
 const likedYouBox = qs("likedYouBox");
 const template = qs("cardTemplate");
+const skeletonTpl = qs("skeletonCard");
 
 const state = {
   token: localStorage.getItem(TOKEN_KEY) || null,
@@ -26,10 +27,11 @@ const state = {
   config: { googleClientId: null, vapidPublicKey: null, freeDailySwipes: 30 },
   ws: null,
   installPrompt: null,
-  iceBreakers: [],
+  wizardStep: 1,
+  pendingPhotos: [],
 };
 
-// ---------- API helper ----------
+// ---------- API ----------
 async function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -45,12 +47,8 @@ async function api(path, opts = {}) {
   return body;
 }
 
-// ---------- utilities ----------
-function showAuthError(elId, msg) {
-  const el = qs(elId);
-  el.textContent = msg;
-  el.hidden = !msg;
-}
+// ---------- utils ----------
+function showAuthError(elId, msg) { const el = qs(elId); el.textContent = msg; el.hidden = !msg; }
 function show(viewName) {
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
@@ -68,35 +66,26 @@ function showToast(message) {
   el.classList.add("show");
   setTimeout(() => el.classList.remove("show"), 1400);
 }
-function haptic(ms = 12) {
-  if (navigator.vibrate) try { navigator.vibrate(ms); } catch {}
-}
+function haptic(ms = 12) { if (navigator.vibrate) try { navigator.vibrate(ms); } catch {} }
 function describeUserType(t) {
-  return ({ founder: "Founder", cofounder_search: "Co-founder hunt", operator: "Operator", investor: "Investor", advisor: "Advisor" })[t] || t || "";
+  return ({ founder: "Founder", cofounder_search: "Looking for co-founder", operator: "Operator", investor: "Investor", advisor: "Advisor" })[t] || t || "";
 }
 function describeStage(s) {
   return ({ idea: "Idea", mvp: "MVP", live: "Live", revenue: "Revenue", scaling: "Scaling" })[s] || s || "";
 }
-function avatarFor(profile) {
-  return (
-    profile?.photoUrl ||
-    profile?.avatarUrl ||
-    `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(profile?.fullName || profile?.headline || "BT")}`
-  );
+function avatarFor(p) {
+  return (p?.photos?.[0] || p?.photoUrl || p?.avatarUrl ||
+    `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(p?.fullName || p?.headline || "BT")}`);
 }
-function profileCompletionPercent(p) {
-  if (!p) return 0;
-  const checks = [
-    !!p.headline, !!p.userType, (p.lookingFor || []).length > 0, !!p.bio, !!p.stage,
-    (p.industries || []).length > 0, (p.skills || []).length > 0, !!p.location,
-    !!p.commitment, !!p.linkedinUrl, !!p.photoUrl, !!p.calLink,
-  ];
-  return Math.round((checks.filter(Boolean).length / checks.length) * 100);
-}
-function preloadImage(url) {
-  if (!url) return;
-  const img = new Image();
-  img.src = url;
+function preloadImage(url) { if (!url) return; const img = new Image(); img.src = url; }
+function timeAgo(d) {
+  if (!d) return "";
+  const diff = (Date.now() - new Date(d).getTime()) / 1000;
+  if (diff < 60) return "now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
+  return new Date(d).toLocaleDateString();
 }
 
 // ---------- chip sets ----------
@@ -113,27 +102,23 @@ function enforceChipMax() {
     });
   });
 }
-function fillOnboardingForm(profile) {
-  if (!profile) return;
-  const form = qs("onboardingForm");
-  for (const f of ["headline", "userType", "bio", "stage", "location", "commitment", "linkedinUrl", "calLink", "pitchDeckUrl"]) {
-    if (form[f]) form[f].value = profile[f] || "";
-  }
-  if (form.hoursPerWeek) form.hoursPerWeek.value = profile.hoursPerWeek || "";
-  if (form.remoteOk) form.remoteOk.checked = !!profile.remoteOk;
-  if (form.pastCompaniesText) form.pastCompaniesText.value = (profile.pastCompanies || []).join(", ");
-  document.querySelectorAll(".chip-set").forEach((set) => {
-    const name = set.dataset.name;
-    const values = profile[name] || [];
-    set.querySelectorAll('input[type="checkbox"]').forEach((cb) => (cb.checked = values.includes(cb.value)));
-  });
-  if (profile.photoUrl) {
-    qs("photoPreview").src = profile.photoUrl;
-    qs("photoPreview").hidden = false;
+
+// ---------- skeleton + empty ----------
+function renderSkeleton(count = 1) {
+  deck.innerHTML = "";
+  for (let i = 0; i < count; i += 1) {
+    const node = skeletonTpl.content.firstElementChild.cloneNode(true);
+    deck.appendChild(node);
   }
 }
+function showEmpty(filtered) {
+  qs("emptyDeck").hidden = false;
+  qs("emptyDeck").querySelector("p").textContent = filtered
+    ? "Try broadening the filters above, invite a friend with your referral code, or check back later."
+    : "You're early — invite a friend with your referral code to grow the pool.";
+}
 
-// ---------- deck rendering ----------
+// ---------- card rendering ----------
 function renderCard(p, index, total) {
   const node = template.content.firstElementChild.cloneNode(true);
   node.style.zIndex = `${10 + index}`;
@@ -144,15 +129,10 @@ function renderCard(p, index, total) {
   node.querySelector(".meta").textContent = `${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote" : ""}`;
   node.querySelector(".bio").textContent = p.bio || "";
   const tags = node.querySelector(".tags");
-  (p.industries || []).slice(0, 4).forEach((t) => {
-    const li = document.createElement("li");
-    li.textContent = t;
-    tags.appendChild(li);
-  });
+  (p.industries || []).slice(0, 4).forEach((t) => { const li = document.createElement("li"); li.textContent = t; tags.appendChild(li); });
   (p.skills || []).slice(0, 3).forEach((t) => {
-    const li = document.createElement("li");
-    li.textContent = t;
-    li.style.background = "#1f2c4a";
+    const li = document.createElement("li"); li.textContent = t;
+    li.style.background = "rgba(124,92,255,0.18)"; li.style.borderColor = "rgba(124,92,255,0.4)";
     tags.appendChild(li);
   });
   const lf = (p.lookingFor || []).map((x) => x.replace("_", " ")).join(", ");
@@ -161,7 +141,7 @@ function renderCard(p, index, total) {
   if (p.matchReasons?.length) reasonsEl.textContent = `✓ ${p.matchReasons.slice(0, 2).join(" · ")}`;
   if (typeof p.matchScore === "number") {
     const pill = node.querySelector(".score-pill");
-    pill.textContent = `${p.matchScore}`;
+    pill.textContent = `${p.matchScore}% match`;
     pill.hidden = false;
   }
   return node;
@@ -169,16 +149,19 @@ function renderCard(p, index, total) {
 
 function renderDeck() {
   deck.innerHTML = "";
-  if (!state.pool.length) {
-    statusText.textContent = "No more profiles. Try changing filters or come back later.";
+  qs("emptyDeck").hidden = true;
+  const remaining = state.pool.slice(state.index, state.index + 2).reverse();
+  if (!remaining.length) {
+    const hasFilters = state.filters.stage || state.filters.lookingFor || state.filters.industry !== "all";
+    showEmpty(hasFilters);
     return;
   }
-  const remaining = state.pool.slice(state.index, state.index + 2).reverse();
   remaining.forEach((p, i) => {
     const node = renderCard(p, i, remaining.length);
     if (i === remaining.length - 1) {
       enableSwipe(node, p);
       enableLongPress(node, p);
+      node.addEventListener("dblclick", () => openDetail(p));
     }
     deck.appendChild(node);
   });
@@ -188,10 +171,7 @@ function renderDeck() {
 
 function renderGrid(target, profiles) {
   target.innerHTML = "";
-  if (!profiles.length) {
-    target.innerHTML = "<p class='hint'>Nothing here yet.</p>";
-    return;
-  }
+  if (!profiles.length) { target.innerHTML = "<p class='hint'>Nothing here yet.</p>"; return; }
   profiles.forEach((p) => {
     const card = document.createElement("article");
     card.className = "grid-card glass";
@@ -200,15 +180,8 @@ function renderGrid(target, profiles) {
       <h3>${p.fullName || ""}</h3>
       <p class="role">${p.headline || ""}</p>
       <p class="meta">${describeUserType(p.userType)} · ${p.location || ""}</p>
-      <p class="score">${typeof p.matchScore === "number" ? `${p.matchScore}% match` : ""}</p>
-    `;
-    card.addEventListener("click", () => {
-      const idx = state.pool.findIndex((x) => x.userId === p.userId);
-      if (idx >= 0) state.index = idx;
-      else state.pool.unshift(p);
-      switchView("cards");
-      renderDeck();
-    });
+      <p class="score">${typeof p.matchScore === "number" ? `${p.matchScore}% match` : ""}</p>`;
+    card.addEventListener("click", () => openDetail(p));
     target.appendChild(card);
   });
 }
@@ -223,8 +196,37 @@ function switchView(mode) {
   if (mode === "grid") renderGrid(grid, state.pool);
 }
 
+// ---------- detail modal ----------
+function openDetail(p) {
+  const photos = p.photos?.length ? p.photos : [avatarFor(p)];
+  qs("detailGallery").innerHTML = photos.map((src) => `<img src="${src}" alt="" />`).join("");
+  qs("detailBody").innerHTML = `
+    <h2>${p.fullName || ""}</h2>
+    <p class="role">${p.headline || ""}</p>
+    <p class="meta">${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote OK" : ""}</p>
+    ${typeof p.matchScore === "number" ? `<p class="reasons-row">${p.matchScore}% match${p.matchReasons?.length ? " · " + p.matchReasons.join(" · ") : ""}</p>` : ""}
+    <p>${p.bio || ""}</p>
+    ${p.lookingFor?.length ? `<div class="section"><h3>Looking for</h3><ul class="tags">${p.lookingFor.map((x) => `<li>${x.replace("_", " ")}</li>`).join("")}</ul></div>` : ""}
+    ${p.industries?.length ? `<div class="section"><h3>Industries</h3><ul class="tags">${p.industries.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
+    ${p.skills?.length ? `<div class="section"><h3>What they bring</h3><ul class="tags">${p.skills.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
+    ${p.pastCompanies?.length ? `<div class="section"><h3>Past companies</h3><p>${p.pastCompanies.join(" · ")}</p></div>` : ""}
+    ${p.commitment ? `<div class="section"><h3>Commitment</h3><p>${p.commitment.replace("_", " ")}${p.hoursPerWeek ? ` · ${p.hoursPerWeek}h/wk` : ""}</p></div>` : ""}
+    ${p.linkedinUrl ? `<div class="section"><h3>LinkedIn</h3><p><a href="${p.linkedinUrl}" target="_blank" rel="noopener">${p.linkedinUrl}</a></p></div>` : ""}
+    ${p.pitchDeckUrl ? `<div class="section"><h3>Pitch deck</h3><p><a href="${p.pitchDeckUrl}" target="_blank" rel="noopener">View deck</a></p></div>` : ""}
+    ${p.calLink ? `<div class="section"><h3>Schedule a call</h3><p><a href="${p.calLink}" target="_blank" rel="noopener">${p.calLink}</a></p></div>` : ""}
+    <div class="detail-actions">
+      <button class="pass-btn" id="detailPassBtn" type="button">Pass</button>
+      <button class="like-btn" id="detailLikeBtn" type="button">Like</button>
+    </div>`;
+  qs("detailModal").hidden = false;
+  qs("detailPassBtn").onclick = () => { qs("detailModal").hidden = true; onSwipe("left", p); };
+  qs("detailLikeBtn").onclick = () => { qs("detailModal").hidden = true; onSwipe("right", p); };
+}
+qs("detailCloseBtn").addEventListener("click", () => (qs("detailModal").hidden = true));
+
 // ---------- discover / matches / saved ----------
 async function loadDiscover() {
+  renderSkeleton(2);
   const params = new URLSearchParams();
   if (state.filters.stage) params.set("stage", state.filters.stage);
   if (state.filters.lookingFor) params.set("lookingFor", state.filters.lookingFor);
@@ -243,16 +245,14 @@ async function loadMatches() {
   try {
     state.matches = await api("/matches");
     renderMatches();
+    updateUnreadDot();
   } catch (e) {
-    matchesList.innerHTML = `<li>${e.message}</li>`;
+    matchesList.innerHTML = `<li class="hint">${e.message}</li>`;
   }
 }
 
 async function loadSaved() {
-  try {
-    state.saved = await api("/saved");
-    renderSaved();
-  } catch {}
+  try { state.saved = await api("/saved"); renderSaved(); } catch {}
 }
 
 async function loadLikedYou() {
@@ -260,71 +260,91 @@ async function loadLikedYou() {
     const data = await api("/likes/incoming");
     qs("likedCount").textContent = data.count;
     qs("likedBadge").hidden = data.count === 0;
+    qs("likedYouCount").textContent = data.count ? ` · ${data.count}` : "";
     if (data.locked) {
-      likedYouBox.innerHTML = `<p class="hint">${data.count} ${data.count === 1 ? "person" : "people"} liked you.</p>
-        <button class="primary" id="seeLikesBtn" type="button">See who (Pro)</button>`;
+      likedYouBox.innerHTML = `<div class="liked-locked">
+        <div class="big">${data.count}</div>
+        <p>${data.count === 1 ? "person" : "people"} liked your profile</p>
+        <button class="primary" id="seeLikesBtn" type="button">Upgrade to Pro to see who</button>
+      </div>`;
       qs("seeLikesBtn")?.addEventListener("click", () => (qs("proModal").hidden = false));
     } else {
       likedYouBox.innerHTML = "";
-      (data.profiles || []).forEach((p) => {
-        const div = document.createElement("div");
-        div.className = "liked-row";
-        div.innerHTML = `<img src="${avatarFor(p)}" alt="" /><div><strong>${p.fullName}</strong><br/><small>${p.headline || ""}</small></div>`;
-        likedYouBox.appendChild(div);
-      });
+      if (!data.profiles?.length) {
+        likedYouBox.innerHTML = `<div class="empty"><div class="empty-icon">💌</div><p>No one has liked you yet. Make sure your profile photo and headline are strong.</p></div>`;
+      } else {
+        (data.profiles || []).forEach((p) => {
+          const div = document.createElement("div");
+          div.className = "liked-row";
+          div.innerHTML = `<img src="${avatarFor(p)}" alt="" /><div><strong>${p.fullName}</strong><br/><small style="color:var(--text-2)">${p.headline || ""}</small></div>`;
+          div.addEventListener("click", () => openDetail(p));
+          likedYouBox.appendChild(div);
+        });
+      }
     }
   } catch {}
 }
 
 function renderMatches() {
+  qs("matchesCount").textContent = state.matches.length ? ` · ${state.matches.length}` : "";
   matchesList.innerHTML = "";
   if (!state.matches.length) {
-    matchesList.innerHTML = "<li>No matches yet. Swipe right on discover.</li>";
+    matchesList.innerHTML = `<li class="empty"><div class="empty-icon">💼</div><p>No matches yet. Go swipe right on someone great.</p></li>`;
     return;
   }
   state.matches.forEach((m) => {
-    const other = m.other;
-    if (!other) return;
+    const other = m.other; if (!other) return;
     const li = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = `${other.fullName} · ${other.profile?.headline || ""}`;
-    const actions = document.createElement("div");
-    actions.className = "row-actions";
-    const chatBtn = document.createElement("button");
-    chatBtn.className = "primary";
-    chatBtn.dataset.matchId = m.id;
-    chatBtn.textContent = "Chat";
-    const blockBtn = document.createElement("button");
-    blockBtn.dataset.blockTarget = other.id;
-    blockBtn.textContent = "Block";
-    const reportBtn = document.createElement("button");
-    reportBtn.className = "warn";
-    reportBtn.dataset.reportTarget = other.id;
-    reportBtn.textContent = "Report";
-    actions.append(chatBtn, blockBtn, reportBtn);
-    li.append(label, actions);
+    li.className = "match-row";
+    li.dataset.matchId = m.id;
+    li.innerHTML = `
+      <img src="${avatarFor({ photos: other.profile?.photos, photoUrl: other.profile?.photoUrl, avatarUrl: other.avatarUrl, fullName: other.fullName })}" alt="" />
+      <div class="match-meta">
+        <div class="match-name">${other.fullName}</div>
+        <div class="match-preview">${m.lastMessage?.body ? (m.lastMessage.senderId === state.user.id ? "You: " : "") + m.lastMessage.body : (other.profile?.headline || "Say hi 👋")}</div>
+      </div>
+      <div class="match-side">
+        ${m.unreadCount > 0 ? `<span class="unread-pill">${m.unreadCount}</span>` : ""}
+        ${m.lastMessage ? `<span class="match-ts">${timeAgo(m.lastMessage.createdAt)}</span>` : ""}
+      </div>`;
+    li.addEventListener("click", () => openChat(m.id));
     matchesList.appendChild(li);
   });
 }
 
 function renderSaved() {
+  qs("savedCount").textContent = state.saved.length ? ` · ${state.saved.length}` : "";
   savedList.innerHTML = "";
   if (!state.saved.length) {
-    savedList.innerHTML = "<li>No saved profiles yet.</li>";
+    savedList.innerHTML = `<li class="empty"><div class="empty-icon">★</div><p>Tap the star on a card to shortlist someone for later.</p></li>`;
     return;
   }
   state.saved.forEach((p) => {
     const li = document.createElement("li");
-    li.innerHTML = `<span>${p.fullName} · ${p.headline || ""}</span>`;
-    const btn = document.createElement("button");
-    btn.textContent = "Remove";
-    btn.dataset.unsaveTarget = p.userId;
-    li.appendChild(btn);
+    li.className = "match-row";
+    li.innerHTML = `
+      <img src="${avatarFor(p)}" alt="" />
+      <div class="match-meta">
+        <div class="match-name">${p.fullName}</div>
+        <div class="match-preview">${p.headline || ""}</div>
+      </div>
+      <div class="match-side">
+        <button class="ghost" data-unsave-target="${p.userId}">Remove</button>
+      </div>`;
+    li.addEventListener("click", (ev) => {
+      if (ev.target?.dataset?.unsaveTarget) return;
+      openDetail(p);
+    });
     savedList.appendChild(li);
   });
 }
 
-// ---------- swipe interactions ----------
+function updateUnreadDot() {
+  const hasUnread = state.matches.some((m) => m.unreadCount > 0);
+  document.querySelector('.tab[data-view="matches"]')?.classList.toggle("has-unread", hasUnread);
+}
+
+// ---------- swipe ----------
 async function onSwipe(direction, profile) {
   haptic(direction === "right" ? 18 : 8);
   state.swipeHistory.push({ userId: profile.userId, direction });
@@ -342,28 +362,26 @@ async function onSwipe(direction, profile) {
       statusText.textContent = direction === "right" ? `Liked ${profile.fullName}.` : `Passed on ${profile.fullName}.`;
     }
   } catch (e) {
-    if (e.status === 429) {
-      qs("proModal").hidden = false;
-    }
+    if (e.status === 429) { qs("proModal").hidden = false; }
     statusText.textContent = e.message;
   }
   renderDeck();
 }
 
 function showMatchModal(profile, res) {
-  qs("matchModalText").textContent = `You matched with ${profile.fullName}.`;
+  qs("matchModalText").textContent = `You and ${profile.fullName} both swiped right.`;
   const list = qs("matchModalIcebreakers");
   list.innerHTML = "";
   (res.icebreakers || []).forEach((prompt) => {
     const li = document.createElement("li");
     li.textContent = prompt;
-    li.addEventListener("click", () => {
-      qs("chatInput").value = prompt;
+    li.addEventListener("click", async () => {
       qs("matchModal").hidden = true;
-      const match = (state.matches || []).find(
-        (m) => m.other?.id === profile.userId || m.other?.id === profile.id,
-      );
-      if (match) openChat(match.id);
+      await loadMatches();
+      const match = state.matches.find((m) => m.other?.id === profile.userId);
+      if (match) {
+        openChat(match.id).then(() => { qs("chatInput").value = prompt; qs("chatInput").focus(); });
+      }
     });
     list.appendChild(li);
   });
@@ -399,13 +417,11 @@ function enableSwipe(card, profile) {
     else { card.classList.remove("like", "pass"); badge.textContent = ""; }
   });
   const up = (e) => {
-    if (!dragging) return;
-    dragging = false;
+    if (!dragging) return; dragging = false;
     try { card.releasePointerCapture?.(e?.pointerId); } catch {}
     if (dx > 120) return fling("right");
     if (dx < -120) return fling("left");
-    card.style.transform = "translateX(0)";
-    card.classList.remove("like", "pass");
+    card.style.transform = "translateX(0)"; card.classList.remove("like", "pass");
   };
   card.addEventListener("pointerup", up);
   card.addEventListener("pointercancel", up);
@@ -436,34 +452,41 @@ function enableLongPress(card, profile) {
   );
 }
 
-// ---------- onboarding form ----------
-async function readPhotoAsDataUrl(file) {
-  if (!file) return null;
-  if (file.size > 700 * 1024) throw new Error("Photo too large (max 700KB).");
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+// ---------- onboarding wizard ----------
+const STEP_COUNT = 4;
+function showWizardStep(n) {
+  state.wizardStep = n;
+  document.querySelectorAll(".wizard-step").forEach((el) => el.classList.remove("active"));
+  document.querySelector(`.wizard-step[data-step="${n}"]`).classList.add("active");
+  document.querySelectorAll(".wizard-progress > span").forEach((el, i) => {
+    el.classList.toggle("active", i + 1 === n);
+    el.classList.toggle("done", i + 1 < n);
   });
+  qs("wizardBack").hidden = n === 1;
+  qs("wizardNext").hidden = n === STEP_COUNT;
+  qs("wizardSubmit").hidden = n !== STEP_COUNT;
+  if (n === STEP_COUNT) renderPreviewCard();
 }
-
-qs("photoInput").addEventListener("change", async (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  try {
-    const dataUrl = await readPhotoAsDataUrl(file);
-    qs("photoPreview").src = dataUrl;
-    qs("photoPreview").hidden = false;
-    qs("photoPreview").dataset.dataUrl = dataUrl;
-  } catch (err) { alert(err.message); }
-});
-
-qs("onboardingForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  showAuthError("onboardingError", "");
-  const form = e.target;
-  const payload = {
+function validateStep(n) {
+  const form = qs("onboardingForm");
+  if (n === 1) {
+    if (!form.headline.value.trim()) return "Add a headline.";
+    if (!form.userType.value) return "Choose what you are.";
+    if (!form.location.value.trim()) return "Add a location.";
+  }
+  if (n === 2) {
+    if (!form.bio.value.trim()) return "Add a one-liner about what you're building.";
+    if (!form.stage.value) return "Pick a stage.";
+    if (readChipSet(document.querySelector('.chip-set[data-name="industries"]')).length === 0) return "Pick at least one industry.";
+  }
+  if (n === 3) {
+    if (readChipSet(document.querySelector('.chip-set[data-name="lookingFor"]')).length === 0) return "Pick at least one goal.";
+  }
+  return null;
+}
+function gatherProfilePayload() {
+  const form = qs("onboardingForm");
+  return {
     headline: form.headline.value.trim(),
     userType: form.userType.value,
     bio: form.bio.value.trim(),
@@ -479,9 +502,85 @@ qs("onboardingForm").addEventListener("submit", async (e) => {
     lookingFor: readChipSet(document.querySelector('.chip-set[data-name="lookingFor"]')),
     industries: readChipSet(document.querySelector('.chip-set[data-name="industries"]')),
     skills: readChipSet(document.querySelector('.chip-set[data-name="skills"]')),
-    photoUrl: qs("photoPreview").dataset.dataUrl || qs("photoPreview").src || null,
+    photos: state.pendingPhotos.length ? state.pendingPhotos : (state.profile?.photos || []),
   };
+}
+function renderPreviewCard() {
+  const p = gatherProfilePayload();
+  p.fullName = state.user?.fullName || "";
+  const photo = p.photos?.[0] || avatarFor(p);
+  qs("previewCard").innerHTML = `
+    <img src="${photo}" alt="" />
+    <h3>${p.fullName}</h3>
+    <p class="role">${p.headline || ""}</p>
+    <p class="meta">${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote" : ""}</p>
+    <p class="bio">${p.bio || ""}</p>
+    <ul class="tags">${(p.industries || []).slice(0, 4).map((t) => `<li>${t}</li>`).join("")}</ul>
+    <p class="meta" style="margin-top:10px;">${p.lookingFor?.length ? `Looking for: ${p.lookingFor.join(", ")}` : ""}</p>`;
+}
+
+qs("wizardNext").addEventListener("click", () => {
+  const err = validateStep(state.wizardStep);
+  if (err) { showAuthError("onboardingError", err); return; }
+  showAuthError("onboardingError", "");
+  showWizardStep(state.wizardStep + 1);
+});
+qs("wizardBack").addEventListener("click", () => {
+  showAuthError("onboardingError", "");
+  showWizardStep(Math.max(1, state.wizardStep - 1));
+});
+
+// Photo gallery (up to 5 data URLs)
+function renderPhotoGallery() {
+  const g = qs("photoGallery");
+  g.innerHTML = "";
+  state.pendingPhotos.forEach((src, i) => {
+    const wrap = document.createElement("div");
+    wrap.style.position = "relative";
+    wrap.innerHTML = `<img src="${src}" alt="" /><button type="button" style="position:absolute;top:-4px;right:-4px;width:20px;height:20px;border-radius:50%;background:#000;color:#fff;border:0;">✕</button>`;
+    wrap.querySelector("button").onclick = () => { state.pendingPhotos.splice(i, 1); renderPhotoGallery(); };
+    g.appendChild(wrap);
+  });
+  if (state.pendingPhotos.length < 5) {
+    const add = document.createElement("label");
+    add.className = "photo-add";
+    add.innerHTML = "＋<input type='file' accept='image/*' style='display:none;' />";
+    add.querySelector("input").addEventListener("change", async (e) => {
+      const file = e.target.files?.[0]; if (!file) return;
+      if (file.size > 700 * 1024) return alert("Photo too large (max 700KB).");
+      const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+      state.pendingPhotos.push(dataUrl);
+      renderPhotoGallery();
+    });
+    g.appendChild(add);
+  }
+}
+// hide the old single-file input; new gallery handles it
+qs("photoInput").style.display = "none";
+
+function fillOnboardingForm(profile) {
+  if (!profile) { state.pendingPhotos = []; renderPhotoGallery(); return; }
+  const form = qs("onboardingForm");
+  for (const f of ["headline", "userType", "bio", "stage", "location", "commitment", "linkedinUrl", "calLink", "pitchDeckUrl"]) {
+    if (form[f]) form[f].value = profile[f] || "";
+  }
+  if (form.hoursPerWeek) form.hoursPerWeek.value = profile.hoursPerWeek || "";
+  if (form.remoteOk) form.remoteOk.checked = !!profile.remoteOk;
+  if (form.pastCompaniesText) form.pastCompaniesText.value = (profile.pastCompanies || []).join(", ");
+  document.querySelectorAll(".chip-set").forEach((set) => {
+    const name = set.dataset.name;
+    const values = profile[name] || [];
+    set.querySelectorAll('input[type="checkbox"]').forEach((cb) => (cb.checked = values.includes(cb.value)));
+  });
+  state.pendingPhotos = profile.photos?.length ? [...profile.photos] : (profile.photoUrl ? [profile.photoUrl] : []);
+  renderPhotoGallery();
+}
+
+qs("onboardingForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  showAuthError("onboardingError", "");
   try {
+    const payload = gatherProfilePayload();
     state.profile = await api("/profiles", { method: "POST", body: JSON.stringify(payload) });
     show("swipe");
     await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou()]);
@@ -490,40 +589,27 @@ qs("onboardingForm").addEventListener("submit", async (e) => {
   }
 });
 
-// ---------- auth handlers ----------
+// ---------- auth ----------
 qs("loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   showAuthError("loginError", "");
   const fd = new FormData(e.target);
   try {
-    const data = await api("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
-    });
+    const data = await api("/auth/login", { method: "POST", body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }) });
     const me = await fetchMeWithToken(data.token);
     await onAuthSuccess(data.token, me.user, me.profile);
-  } catch (err) {
-    showAuthError("loginError", err.message);
-  }
+  } catch (err) { showAuthError("loginError", err.message); }
 });
 qs("registerForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   showAuthError("registerError", "");
   const fd = new FormData(e.target);
   try {
-    const data = await api("/auth/register", {
-      method: "POST",
-      body: JSON.stringify({
-        email: fd.get("email"),
-        password: fd.get("password"),
-        fullName: fd.get("fullName"),
-        referredBy: fd.get("referredBy") || null,
-      }),
-    });
+    const data = await api("/auth/register", { method: "POST", body: JSON.stringify({
+      email: fd.get("email"), password: fd.get("password"), fullName: fd.get("fullName"), referredBy: fd.get("referredBy") || null,
+    }) });
     await onAuthSuccess(data.token, data.user, null);
-  } catch (err) {
-    showAuthError("registerError", err.message);
-  }
+  } catch (err) { showAuthError("registerError", err.message); }
 });
 document.querySelectorAll(".auth-tab").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -534,13 +620,11 @@ document.querySelectorAll(".auth-tab").forEach((btn) => {
     qs("registerForm").hidden = target !== "register";
   });
 });
-
 async function fetchMeWithToken(token) {
   const res = await fetch(`${API_BASE}/me`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error("Could not fetch /me");
   return res.json();
 }
-
 async function onAuthSuccess(token, user, profile) {
   state.token = token;
   state.user = user;
@@ -554,28 +638,25 @@ async function onAuthSuccess(token, user, profile) {
     show("swipe");
     await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou()]);
   } else {
+    showWizardStep(1);
     show("onboarding");
   }
 }
-
 function logout() {
-  state.token = null;
-  state.user = null;
-  state.profile = null;
-  state.pool = [];
-  state.matches = [];
+  state.token = null; state.user = null; state.profile = null;
+  state.pool = []; state.matches = []; state.saved = [];
   localStorage.removeItem(TOKEN_KEY);
   state.ws?.close();
   setLoggedInChrome(false);
   show("auth");
 }
-
 function updateChrome() {
   qs("planBadge").hidden = false;
   qs("planBadge").textContent = state.user?.planTier === "PRO" ? "PRO" : "FREE";
   qs("planBadge").classList.toggle("pro", state.user?.planTier === "PRO");
   qs("settingsPlan").textContent = state.user?.planTier || "FREE";
   qs("settingsReferral").textContent = state.user?.referralCode || "—";
+  qs("settingsEmail").textContent = state.user?.email || "—";
   if (state.profile?.slug) {
     const link = `${API_BASE}/u/${state.profile.slug}`;
     qs("publicProfileLink").href = link;
@@ -583,15 +664,10 @@ function updateChrome() {
   }
 }
 
-// ---------- Google login ----------
+// ---------- Google ----------
 async function setupGoogle() {
-  try {
-    state.config = await fetch(`${API_BASE}/auth/config`).then((r) => r.json());
-  } catch {}
-  if (!state.config.googleClientId) {
-    qs("googleDisabledNote").hidden = false;
-    return;
-  }
+  try { state.config = await fetch(`${API_BASE}/auth/config`).then((r) => r.json()); } catch {}
+  if (!state.config.googleClientId) { qs("googleDisabledNote").hidden = false; return; }
   const init = () => {
     if (!window.google?.accounts) return setTimeout(init, 200);
     window.google.accounts.id.initialize({
@@ -602,19 +678,15 @@ async function setupGoogle() {
           const data = await api("/auth/google", { method: "POST", body: JSON.stringify({ credential: resp.credential, referredBy }) });
           const me = await fetchMeWithToken(data.token);
           await onAuthSuccess(data.token, me.user, me.profile);
-        } catch (e) {
-          showAuthError("loginError", e.message);
-        }
+        } catch (e) { showAuthError("loginError", e.message); }
       },
     });
-    window.google.accounts.id.renderButton(qs("googleBtnWrap"), {
-      theme: "filled_black", size: "large", width: 320, text: "continue_with",
-    });
+    window.google.accounts.id.renderButton(qs("googleBtnWrap"), { theme: "filled_black", size: "large", width: 320, text: "continue_with" });
   };
   init();
 }
 
-// ---------- chat + WS ----------
+// ---------- chat ----------
 function connectWebSocket() {
   if (!state.token) return;
   try {
@@ -625,8 +697,13 @@ function connectWebSocket() {
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
-        if (msg.type === "message" && state.activeMatch?.conversation?.id === msg.message.conversationId) {
-          appendMessage(msg.message);
+        if (msg.type === "message") {
+          if (state.activeMatch?.conversation?.id === msg.message.conversationId) {
+            appendMessage(msg.message);
+            api(`/conversations/${msg.message.conversationId}/read`, { method: "POST" }).then(loadMatches);
+          } else {
+            loadMatches();
+          }
         }
         if (msg.type === "typing" && state.activeMatch?.conversation?.id === msg.conversationId) {
           qs("typingIndicator").hidden = false;
@@ -637,12 +714,11 @@ function connectWebSocket() {
     };
   } catch {}
 }
-
 function appendMessage(m) {
   const box = qs("messages");
   const div = document.createElement("div");
   div.className = `msg ${m.senderId === state.user.id ? "me" : "them"}`;
-  div.textContent = m.body;
+  div.innerHTML = `${m.body}${m.createdAt ? `<span class="ts">${timeAgo(m.createdAt)}</span>` : ""}`;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
@@ -651,7 +727,7 @@ async function openChat(matchId) {
   const match = state.matches.find((m) => m.id === matchId);
   if (!match || !match.conversation) return;
   state.activeMatch = match;
-  qs("chatTitle").textContent = `Chat · ${match.other?.fullName || ""}`;
+  qs("chatTitle").textContent = `${match.other?.fullName || "Chat"}`;
   qs("bookCallBtn").hidden = !match.other?.profile?.calLink;
   qs("bookCallBtn").onclick = () => window.open(match.other.profile.calLink, "_blank");
   const box = qs("messages");
@@ -668,12 +744,13 @@ async function openChat(matchId) {
       box2.hidden = false;
       box2.innerHTML = `<p class="hint">Icebreakers</p>` + ice.prompts.map((p) => `<button type="button">${p}</button>`).join("");
       box2.querySelectorAll("button").forEach((b) =>
-        b.addEventListener("click", () => { qs("chatInput").value = b.textContent; box2.hidden = true; }),
+        b.addEventListener("click", () => { qs("chatInput").value = b.textContent; qs("chatInput").focus(); box2.hidden = true; }),
       );
     } else {
       box2.hidden = true;
     }
   } catch {}
+  api(`/conversations/${match.conversation.id}/read`, { method: "POST" }).then(loadMatches);
   show("chat");
 }
 
@@ -686,40 +763,21 @@ qs("chatForm").addEventListener("submit", async (e) => {
   input.value = "";
   try {
     if (state.ws?.readyState === 1) {
-      state.ws.send(JSON.stringify({
-        type: "send_message",
-        conversationId: state.activeMatch.conversation.id,
-        toUserId: state.activeMatch.other.id,
-        body: text,
-      }));
-      appendMessage({ senderId: state.user.id, body: text, conversationId: state.activeMatch.conversation.id });
+      state.ws.send(JSON.stringify({ type: "send_message", conversationId: state.activeMatch.conversation.id, toUserId: state.activeMatch.other.id, body: text }));
+      appendMessage({ senderId: state.user.id, body: text, conversationId: state.activeMatch.conversation.id, createdAt: new Date().toISOString() });
     } else {
-      const saved = await api(`/messages/${state.activeMatch.conversation.id}`, {
-        method: "POST",
-        body: JSON.stringify({ body: text }),
-      });
+      const saved = await api(`/messages/${state.activeMatch.conversation.id}`, { method: "POST", body: JSON.stringify({ body: text }) });
       appendMessage(saved);
     }
-  } catch (e) {
-    alert(e.message);
-  }
+  } catch (e) { alert(e.message); }
 });
-
 qs("chatInput").addEventListener("input", () => {
   if (state.ws?.readyState !== 1 || !state.activeMatch?.conversation) return;
-  state.ws.send(JSON.stringify({
-    type: "typing",
-    conversationId: state.activeMatch.conversation.id,
-    toUserId: state.activeMatch.other.id,
-  }));
+  state.ws.send(JSON.stringify({ type: "typing", conversationId: state.activeMatch.conversation.id, toUserId: state.activeMatch.other.id }));
 });
-
 qs("requestVideoBtn").addEventListener("click", async () => {
   if (!state.activeMatch?.conversation) return;
-  await api(`/messages/${state.activeMatch.conversation.id}`, {
-    method: "POST",
-    body: JSON.stringify({ body: "🎥 Requested a video call. Pick a time?", kind: "video_request" }),
-  });
+  await api(`/messages/${state.activeMatch.conversation.id}`, { method: "POST", body: JSON.stringify({ body: "🎥 Requested a video call. Pick a time?", kind: "video_request" }) });
   showToast("Video call request sent");
 });
 
@@ -738,6 +796,15 @@ qs("saveBtn").addEventListener("click", async () => {
   showToast("Saved to shortlist");
   loadSaved();
 });
+qs("detailBtn").addEventListener("click", () => {
+  const card = deck.querySelector(".card:last-child");
+  if (card?._profile) openDetail(card._profile);
+});
+
+qs("filtersToggle").addEventListener("click", () => {
+  const r = qs("filtersRow");
+  r.hidden = !r.hidden;
+});
 
 ["filterStage", "filterLookingFor", "industryFilter"].forEach((id) => {
   qs(id).addEventListener("change", (e) => {
@@ -745,6 +812,11 @@ qs("saveBtn").addEventListener("click", async () => {
     state.filters[key] = e.target.value;
     loadDiscover();
   });
+});
+qs("emptyResetBtn").addEventListener("click", () => {
+  state.filters = { stage: "", lookingFor: "", industry: "all" };
+  qs("filterStage").value = ""; qs("filterLookingFor").value = ""; qs("industryFilter").value = "all";
+  loadDiscover();
 });
 qs("viewToggle").addEventListener("click", () => switchView(state.view === "cards" ? "grid" : "cards"));
 
@@ -768,6 +840,7 @@ qs("searchInput").addEventListener("input", (e) => {
   }, 250);
 });
 
+// Tabs (bottom nav)
 document.querySelectorAll(".tab").forEach((btn) =>
   btn.addEventListener("click", () => {
     show(btn.dataset.view);
@@ -775,26 +848,20 @@ document.querySelectorAll(".tab").forEach((btn) =>
   }),
 );
 
-matchesList.addEventListener("click", async (e) => {
-  const matchId = e.target?.dataset?.matchId;
-  const blockTarget = e.target?.dataset?.blockTarget;
-  const reportTarget = e.target?.dataset?.reportTarget;
-  if (matchId) openChat(matchId);
-  if (blockTarget) {
-    await api("/blocks", { method: "POST", body: JSON.stringify({ targetId: blockTarget }) });
-    state.matches = state.matches.filter((m) => m.other?.id !== blockTarget);
-    renderMatches();
-  }
-  if (reportTarget) {
-    const reason = prompt("Why are you reporting?");
-    await api("/reports", { method: "POST", body: JSON.stringify({ targetId: reportTarget, reason }) });
-    state.matches = state.matches.filter((m) => m.other?.id !== reportTarget);
-    renderMatches();
-  }
-});
+// Tabs (within matches)
+document.querySelectorAll(".tab-btn").forEach((btn) =>
+  btn.addEventListener("click", () => {
+    const pane = btn.dataset.pane;
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll(".tab-pane").forEach((p) => p.classList.toggle("active", p.dataset.pane === pane));
+  }),
+);
+
 savedList.addEventListener("click", async (e) => {
   const target = e.target?.dataset?.unsaveTarget;
   if (!target) return;
+  e.stopPropagation();
   await api(`/saved/${target}`, { method: "DELETE" });
   loadSaved();
 });
@@ -827,29 +894,25 @@ function urlB64ToUint8Array(base64) {
 }
 qs("enablePushBtn").addEventListener("click", async () => {
   if (!state.config.vapidPublicKey) return alert("Push not configured on the server.");
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return alert("Push not supported.");
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return alert("Push not supported on this device.");
   const perm = await Notification.requestPermission();
   if (perm !== "granted") return;
   const reg = await navigator.serviceWorker.ready;
-  const sub = await reg.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlB64ToUint8Array(state.config.vapidPublicKey),
-  });
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(state.config.vapidPublicKey) });
   const json = sub.toJSON();
   await api("/push/subscribe", { method: "POST", body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }) });
   showToast("Push enabled");
 });
-
 window.addEventListener("beforeinstallprompt", (e) => {
   e.preventDefault();
   state.installPrompt = e;
-  qs("installAppBtn").hidden = false;
+  qs("installRow").hidden = false;
 });
 qs("installAppBtn").addEventListener("click", async () => {
   if (state.installPrompt) {
     state.installPrompt.prompt();
     state.installPrompt = null;
-    qs("installAppBtn").hidden = true;
+    qs("installRow").hidden = true;
   }
 });
 
@@ -862,9 +925,7 @@ async function boot() {
       const me = await fetchMeWithToken(state.token);
       await onAuthSuccess(state.token, me.user, me.profile);
       return;
-    } catch {
-      logout();
-    }
+    } catch { logout(); }
   }
   setLoggedInChrome(false);
   show("auth");

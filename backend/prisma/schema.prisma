@@ -46,6 +46,7 @@ model Profile {
   linkedinUrl   String?
   avatarUrl     String?
   photoUrl      String?
+  photos        String[]
   videoIntroUrl String?
   pastCompanies String[]
   hoursPerWeek  Int?

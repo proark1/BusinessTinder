@@ -3,7 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#7c5cff" />
     <title>BusinessTinder</title>
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="manifest" href="manifest.webmanifest" />
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -11,17 +14,25 @@
   <body>
     <div class="app-shell">
       <header class="topbar glass" id="topbar" hidden>
-        <h1>BusinessTinder</h1>
-        <button id="likedBadge" class="liked-badge" hidden>♥ <span id="likedCount">0</span></button>
-        <button id="planBadge" class="plan-badge ghost" hidden>FREE</button>
-        <button id="settingsBtn" class="ghost" aria-label="Settings">⚙</button>
-        <button id="logoutBtn" class="ghost" aria-label="Log out">Log out</button>
+        <div class="brand">
+          <img src="/icon.svg" alt="" />
+          <span class="brand-name">BusinessTinder</span>
+        </div>
+        <div class="topbar-actions">
+          <button id="likedBadge" class="liked-badge" hidden>♥ <span id="likedCount">0</span></button>
+          <button id="planBadge" class="plan-badge ghost" hidden>FREE</button>
+          <button id="settingsBtn" class="ghost" aria-label="Settings">⚙</button>
+        </div>
       </header>
 
       <main>
+        <!-- ========== AUTH ========== -->
         <section id="view-auth" class="view active glass pad">
-          <h2>Welcome to BusinessTinder</h2>
-          <p class="hint">Match with founders, co-founders, operators and investors.</p>
+          <div class="center" style="margin-bottom:14px;">
+            <img src="/icon.svg" alt="" width="68" height="68" style="filter:drop-shadow(0 10px 30px rgba(124,92,255,.5));" />
+            <h1 style="margin-top:14px;">Welcome to <span class="brand-name">BusinessTinder</span></h1>
+            <p class="hint">Match with founders, co-founders, operators &amp; investors.</p>
+          </div>
 
           <div id="googleBtnWrap" class="google-wrap"></div>
           <p id="googleDisabledNote" class="hint" hidden>Google sign-in not configured.</p>
@@ -31,14 +42,14 @@
             <button class="auth-tab" data-auth-tab="register">Sign up</button>
           </div>
 
-          <form id="loginForm" class="form-grid auth-form">
+          <form id="loginForm" class="form-grid">
             <label>Email<input required type="email" name="email" autocomplete="email" /></label>
             <label>Password<input required type="password" name="password" autocomplete="current-password" /></label>
             <button class="primary" type="submit">Log in</button>
             <p class="auth-error" id="loginError" hidden></p>
           </form>
 
-          <form id="registerForm" class="form-grid auth-form" hidden>
+          <form id="registerForm" class="form-grid" hidden>
             <label>Full name<input required name="fullName" autocomplete="name" /></label>
             <label>Email<input required type="email" name="email" autocomplete="email" /></label>
             <label>Password<input required type="password" name="password" minlength="6" autocomplete="new-password" /></label>
@@ -48,105 +59,145 @@
           </form>
         </section>
 
+        <!-- ========== ONBOARDING WIZARD ========== -->
         <section id="view-onboarding" class="view glass pad">
-          <h2>Build your profile</h2>
-          <p class="hint">Just enough so people can decide whether to match with you.</p>
-          <form id="onboardingForm" class="form-grid">
-            <label>Profile photo
-              <input type="file" id="photoInput" name="photoFile" accept="image/*" />
-              <img id="photoPreview" class="photo-preview" hidden alt="" />
-            </label>
+          <div class="wizard-progress">
+            <span class="active" data-step-bar="1"></span>
+            <span data-step-bar="2"></span>
+            <span data-step-bar="3"></span>
+          </div>
 
-            <label>Headline<input required maxlength="80" name="headline" placeholder="Technical co-founder, ex-Stripe" /></label>
+          <form id="onboardingForm" class="form-grid" novalidate>
+            <!-- Step 1: identity -->
+            <div class="wizard-step active" data-step="1">
+              <h2>Who are you?</h2>
+              <p class="hint">A great photo + headline triples your match rate.</p>
 
-            <label>I am a…
-              <select required name="userType">
-                <option value="">Select one</option>
-                <option value="founder">Founder</option>
-                <option value="cofounder_search">Looking for co-founder</option>
-                <option value="operator">Operator / early hire</option>
-                <option value="investor">Investor / angel</option>
-                <option value="advisor">Advisor / mentor</option>
-              </select>
-            </label>
+              <label>Profile photo
+                <input type="file" id="photoInput" name="photoFile" accept="image/*" />
+                <div class="photo-multi" id="photoGallery"></div>
+              </label>
 
-            <fieldset class="chip-set" data-name="lookingFor" data-max="3">
-              <legend>Looking for (up to 3)</legend>
-              <label><input type="checkbox" value="cofounder" /> Co-founder</label>
-              <label><input type="checkbox" value="hires" /> First hires</label>
-              <label><input type="checkbox" value="customers" /> Customers / pilots</label>
-              <label><input type="checkbox" value="investors" /> Investors</label>
-              <label><input type="checkbox" value="advisors" /> Advisors</label>
-              <label><input type="checkbox" value="partnerships" /> Partnerships</label>
-              <label><input type="checkbox" value="networking" /> Networking</label>
-            </fieldset>
+              <label>Headline<input required maxlength="80" name="headline" placeholder="Technical co-founder, ex-Stripe" /></label>
 
-            <label>What you're building<textarea required name="bio" rows="3" maxlength="240"></textarea></label>
+              <label>I am a…
+                <select required name="userType">
+                  <option value="">Select one</option>
+                  <option value="founder">Founder</option>
+                  <option value="cofounder_search">Looking for co-founder</option>
+                  <option value="operator">Operator / early hire</option>
+                  <option value="investor">Investor / angel</option>
+                  <option value="advisor">Advisor / mentor</option>
+                </select>
+              </label>
 
-            <label>Stage
-              <select required name="stage">
-                <option value="">Select one</option>
-                <option value="idea">Idea</option>
-                <option value="mvp">Building MVP</option>
-                <option value="live">Live with users</option>
-                <option value="revenue">Revenue</option>
-                <option value="scaling">Scaling</option>
-              </select>
-            </label>
+              <label>Location<input required name="location" placeholder="Berlin" /></label>
+              <label class="row-check"><input type="checkbox" name="remoteOk" /> Open to remote</label>
+            </div>
 
-            <fieldset class="chip-set" data-name="industries" data-max="5">
-              <legend>Industries (up to 5)</legend>
-              <label><input type="checkbox" value="AI" /> AI</label>
-              <label><input type="checkbox" value="FinTech" /> FinTech</label>
-              <label><input type="checkbox" value="HealthTech" /> HealthTech</label>
-              <label><input type="checkbox" value="Climate" /> Climate</label>
-              <label><input type="checkbox" value="DevTools" /> Dev tools</label>
-              <label><input type="checkbox" value="Consumer" /> Consumer</label>
-              <label><input type="checkbox" value="Marketplace" /> Marketplace</label>
-              <label><input type="checkbox" value="B2B SaaS" /> B2B SaaS</label>
-              <label><input type="checkbox" value="Web3" /> Web3</label>
-            </fieldset>
+            <!-- Step 2: what you're building -->
+            <div class="wizard-step" data-step="2">
+              <h2>What are you building?</h2>
+              <p class="hint">Two sentences. The clearer the better.</p>
 
-            <fieldset class="chip-set" data-name="skills" data-max="5">
-              <legend>What you bring</legend>
-              <label><input type="checkbox" value="Engineering" /> Engineering</label>
-              <label><input type="checkbox" value="Design" /> Design</label>
-              <label><input type="checkbox" value="Product" /> Product</label>
-              <label><input type="checkbox" value="Sales" /> Sales</label>
-              <label><input type="checkbox" value="Marketing" /> Marketing</label>
-              <label><input type="checkbox" value="Ops" /> Ops</label>
-              <label><input type="checkbox" value="Domain expert" /> Domain expert</label>
-              <label><input type="checkbox" value="Capital" /> Capital</label>
-            </fieldset>
+              <label>One-liner<textarea required name="bio" rows="3" maxlength="240" placeholder="AI-native spend governance for remote-first teams."></textarea></label>
 
-            <label>Past companies (comma-separated)<input name="pastCompaniesText" placeholder="Stripe, Anthropic" /></label>
+              <label>Stage
+                <select required name="stage">
+                  <option value="">Select one</option>
+                  <option value="idea">Idea</option>
+                  <option value="mvp">Building MVP</option>
+                  <option value="live">Live with users</option>
+                  <option value="revenue">Revenue</option>
+                  <option value="scaling">Scaling</option>
+                </select>
+              </label>
 
-            <label>Location<input required name="location" placeholder="Berlin" /></label>
-            <label class="row-check"><input type="checkbox" name="remoteOk" /> Open to remote</label>
+              <fieldset class="chip-set" data-name="industries" data-max="5">
+                <legend>Industries (up to 5)</legend>
+                <label><input type="checkbox" value="AI" /> AI</label>
+                <label><input type="checkbox" value="FinTech" /> FinTech</label>
+                <label><input type="checkbox" value="HealthTech" /> HealthTech</label>
+                <label><input type="checkbox" value="Climate" /> Climate</label>
+                <label><input type="checkbox" value="DevTools" /> Dev tools</label>
+                <label><input type="checkbox" value="Consumer" /> Consumer</label>
+                <label><input type="checkbox" value="Marketplace" /> Marketplace</label>
+                <label><input type="checkbox" value="B2B SaaS" /> B2B SaaS</label>
+                <label><input type="checkbox" value="Web3" /> Web3</label>
+              </fieldset>
 
-            <label>Hours per week available<input type="number" name="hoursPerWeek" min="0" max="80" placeholder="40" /></label>
+              <label>Past companies (comma-separated, optional)<input name="pastCompaniesText" placeholder="Stripe, Anthropic" /></label>
+            </div>
 
-            <label>Commitment
-              <select name="commitment">
-                <option value="">—</option>
-                <option value="full_time">Full-time</option>
-                <option value="part_time">Part-time</option>
-                <option value="exploring">Exploring</option>
-              </select>
-            </label>
+            <!-- Step 3: what you want -->
+            <div class="wizard-step" data-step="3">
+              <h2>What are you looking for?</h2>
+              <p class="hint">This is what people swipe on.</p>
 
-            <label>LinkedIn URL<input type="url" name="linkedinUrl" placeholder="https://linkedin.com/in/…" /></label>
-            <label>Cal.com / Calendly link<input type="url" name="calLink" placeholder="https://cal.com/you" /></label>
-            <label>Pitch deck URL<input type="url" name="pitchDeckUrl" placeholder="https://…" /></label>
+              <fieldset class="chip-set" data-name="lookingFor" data-max="3">
+                <legend>Goals (up to 3)</legend>
+                <label><input type="checkbox" value="cofounder" /> Co-founder</label>
+                <label><input type="checkbox" value="hires" /> First hires</label>
+                <label><input type="checkbox" value="customers" /> Customers</label>
+                <label><input type="checkbox" value="investors" /> Investors</label>
+                <label><input type="checkbox" value="advisors" /> Advisors</label>
+                <label><input type="checkbox" value="partnerships" /> Partnerships</label>
+                <label><input type="checkbox" value="networking" /> Networking</label>
+              </fieldset>
 
-            <button type="submit" class="primary">Save and start matching</button>
-            <p class="auth-error" id="onboardingError" hidden></p>
+              <fieldset class="chip-set" data-name="skills" data-max="5">
+                <legend>What you bring</legend>
+                <label><input type="checkbox" value="Engineering" /> Engineering</label>
+                <label><input type="checkbox" value="Design" /> Design</label>
+                <label><input type="checkbox" value="Product" /> Product</label>
+                <label><input type="checkbox" value="Sales" /> Sales</label>
+                <label><input type="checkbox" value="Marketing" /> Marketing</label>
+                <label><input type="checkbox" value="Ops" /> Ops</label>
+                <label><input type="checkbox" value="Domain expert" /> Domain expert</label>
+                <label><input type="checkbox" value="Capital" /> Capital</label>
+              </fieldset>
+
+              <label>Hours per week available (optional)<input type="number" name="hoursPerWeek" min="0" max="80" placeholder="40" /></label>
+
+              <label>Commitment
+                <select name="commitment">
+                  <option value="">—</option>
+                  <option value="full_time">Full-time</option>
+                  <option value="part_time">Part-time</option>
+                  <option value="exploring">Exploring</option>
+                </select>
+              </label>
+
+              <label>LinkedIn URL (optional)<input type="url" name="linkedinUrl" placeholder="https://linkedin.com/in/…" /></label>
+              <label>Cal.com / Calendly link (optional)<input type="url" name="calLink" placeholder="https://cal.com/you" /></label>
+              <label>Pitch deck URL (optional)<input type="url" name="pitchDeckUrl" /></label>
+            </div>
+
+            <!-- Step 4: preview -->
+            <div class="wizard-step" data-step="4">
+              <h2>Preview your card</h2>
+              <p class="hint">This is what others will swipe on.</p>
+              <div class="preview-wrap"><div class="preview-card" id="previewCard"></div></div>
+              <p class="auth-error" id="onboardingError" hidden></p>
+            </div>
+
+            <div class="wizard-nav">
+              <button type="button" class="ghost" id="wizardBack" hidden>Back</button>
+              <button type="button" class="primary" id="wizardNext">Next</button>
+              <button type="submit" class="primary" id="wizardSubmit" hidden>Publish profile</button>
+            </div>
           </form>
         </section>
 
+        <!-- ========== DISCOVER ========== -->
         <section id="view-swipe" class="view">
           <div class="filters glass pad-sm">
             <div class="filter-row">
+              <input id="searchInput" type="search" placeholder="Search by name, company, skill…" />
+              <button id="viewToggle" class="ghost" type="button" data-mode="cards">Grid</button>
+              <button id="filtersToggle" class="ghost" type="button">Filters</button>
+            </div>
+            <div class="filter-row" id="filtersRow" hidden>
               <select id="filterStage">
                 <option value="">Any stage</option>
                 <option value="idea">Idea</option>
@@ -177,35 +228,48 @@
                 <option value="Web3">Web3</option>
               </select>
             </div>
-            <div class="filter-row">
-              <input id="searchInput" type="search" placeholder="Search by name, company, skill…" />
-              <button id="viewToggle" class="ghost" type="button" data-mode="cards">Grid</button>
-            </div>
             <p id="quotaText" class="quota" hidden></p>
           </div>
           <section id="deck" class="deck" aria-live="polite"></section>
           <section id="grid" class="grid" hidden></section>
           <section id="searchResults" class="grid" hidden></section>
+          <section id="emptyDeck" class="empty" hidden>
+            <div class="empty-icon">✨</div>
+            <h3 style="color:var(--text)">You've seen everyone in your filters</h3>
+            <p>Try broadening the filters above, invite a friend with your referral code, or check back later.</p>
+            <button class="primary" id="emptyResetBtn" type="button">Clear filters</button>
+          </section>
           <section class="actions">
-            <button class="action left" id="leftBtn" aria-label="Pass">✕</button>
-            <button class="action right" id="rightBtn" aria-label="Like">❤</button>
             <button class="action undo" id="undoBtn" aria-label="Undo">↺</button>
-            <button class="action save" id="saveBtn" aria-label="Save">☆</button>
+            <button class="action left" id="leftBtn" aria-label="Pass">✕</button>
+            <button class="action detail" id="detailBtn" aria-label="Details">ⓘ</button>
+            <button class="action right" id="rightBtn" aria-label="Like">❤</button>
+            <button class="action save" id="saveBtn" aria-label="Save">★</button>
           </section>
           <p id="statusText" class="status">Swipe to discover your next business match.</p>
           <div id="matchToast" class="toast" aria-live="polite"></div>
         </section>
 
+        <!-- ========== MATCHES (tabbed) ========== -->
         <section id="view-matches" class="view glass pad">
-          <h2>Your Matches</h2>
-          <ul id="matchesList" class="list"></ul>
-          <h3 style="margin-top:18px;">Shortlist</h3>
-          <ul id="savedList" class="list"></ul>
-          <h3 style="margin-top:18px;">Who liked you</h3>
-          <div id="likedYouBox" class="liked-box"></div>
-          <p class='hint'>You can unmatch, save, block or report from each row.</p>
+          <h2>Connections</h2>
+          <div class="tabs-row">
+            <button class="tab-btn active" data-pane="matches">Matches <span id="matchesCount"></span></button>
+            <button class="tab-btn" data-pane="liked">Liked you <span id="likedYouCount"></span></button>
+            <button class="tab-btn" data-pane="saved">Shortlist <span id="savedCount"></span></button>
+          </div>
+          <div class="tab-pane active" data-pane="matches">
+            <ul id="matchesList" class="list"></ul>
+          </div>
+          <div class="tab-pane" data-pane="liked">
+            <div id="likedYouBox" class="liked-box"></div>
+          </div>
+          <div class="tab-pane" data-pane="saved">
+            <ul id="savedList" class="list"></ul>
+          </div>
         </section>
 
+        <!-- ========== CHAT ========== -->
         <section id="view-chat" class="view glass pad">
           <h2 id="chatTitle">Chat</h2>
           <div id="icebreakerBox" class="icebreakers" hidden></div>
@@ -213,7 +277,7 @@
           <p id="typingIndicator" class="typing" hidden>typing…</p>
           <div id="chatActions" class="chat-actions">
             <button id="bookCallBtn" class="ghost" type="button" hidden>📅 Book a call</button>
-            <button id="requestVideoBtn" class="ghost" type="button">🎥 Request video call</button>
+            <button id="requestVideoBtn" class="ghost" type="button">🎥 Request video</button>
           </div>
           <form id="chatForm" class="chat-form">
             <input id="chatInput" placeholder="Type a message" />
@@ -221,28 +285,62 @@
           </form>
         </section>
 
+        <!-- ========== SETTINGS ========== -->
         <section id="view-settings" class="view glass pad">
           <h2>Settings</h2>
-          <p class="hint">Plan: <strong id="settingsPlan">FREE</strong></p>
-          <button id="upgradeBtn" class="primary">Upgrade to Pro</button>
-          <p class="hint" style="margin-top:14px;">Your referral code:</p>
-          <p><code id="settingsReferral">—</code> · <button id="copyReferralBtn" class="ghost" type="button">Copy</button></p>
-          <p class="hint" style="margin-top:14px;">
-            <button id="enablePushBtn" class="ghost" type="button">Enable push notifications</button>
-            <button id="installAppBtn" class="ghost" type="button" hidden>Install app</button>
-          </p>
-          <p class="hint" style="margin-top:14px;">Public profile: <a id="publicProfileLink" href="#" target="_blank">—</a></p>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Plan</div>
+              <div class="settings-sub" id="settingsPlan">FREE</div>
+            </div>
+            <button id="upgradeBtn" class="primary" style="width:auto;">Upgrade</button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Referral code</div>
+              <div class="settings-sub"><code id="settingsReferral">—</code></div>
+            </div>
+            <button id="copyReferralBtn" class="ghost" type="button">Copy</button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Push notifications</div>
+              <div class="settings-sub">New matches and messages</div>
+            </div>
+            <button id="enablePushBtn" class="ghost" type="button">Enable</button>
+          </div>
+          <div class="settings-row" id="installRow" hidden>
+            <div>
+              <div class="settings-label">Install app</div>
+              <div class="settings-sub">Add to home screen</div>
+            </div>
+            <button id="installAppBtn" class="ghost" type="button">Install</button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Public profile</div>
+              <div class="settings-sub"><a id="publicProfileLink" href="#" target="_blank">—</a></div>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Account</div>
+              <div class="settings-sub" id="settingsEmail">—</div>
+            </div>
+            <button id="logoutBtn" class="ghost" type="button">Log out</button>
+          </div>
         </section>
       </main>
 
       <nav class="tabbar glass" id="tabbar" hidden>
         <button data-view="swipe" class="tab active">Discover</button>
-        <button data-view="matches" class="tab">Matches</button>
+        <button data-view="matches" class="tab"><span class="tab-dot"></span>Connections</button>
         <button data-view="onboarding" class="tab">Profile</button>
         <button data-view="settings" class="tab">Settings</button>
       </nav>
     </div>
 
+    <!-- Templates -->
     <template id="cardTemplate">
       <article class="card">
         <div class="badge"></div>
@@ -264,17 +362,29 @@
       </article>
     </template>
 
+    <template id="skeletonCard">
+      <article class="card skeleton-card">
+        <div class="skeleton avatar-sk"></div>
+        <div class="skeleton line mid"></div>
+        <div class="skeleton line short"></div>
+        <div class="skeleton line"></div>
+        <div class="skeleton line mid"></div>
+      </article>
+    </template>
+
+    <!-- Match modal -->
     <div id="matchModal" class="modal" hidden>
       <div class="modal-card glass pad">
-        <h2>✨ New match</h2>
+        <h2>✨ It's a match</h2>
         <p id="matchModalText"></p>
-        <p class="hint">Break the ice:</p>
+        <p class="hint">Break the ice</p>
         <ul id="matchModalIcebreakers" class="icebreaker-list"></ul>
         <button class="primary" id="matchModalChat" type="button">Open chat</button>
         <button class="ghost" id="matchModalClose" type="button">Later</button>
       </div>
     </div>
 
+    <!-- Pro modal -->
     <div id="proModal" class="modal" hidden>
       <div class="modal-card glass pad">
         <h2>Upgrade to Pro</h2>
@@ -284,8 +394,17 @@
           <li>Advanced filters &amp; verified badge</li>
           <li>Video calls in-app (coming)</li>
         </ul>
-        <button class="primary" id="proConfirmBtn" type="button">Upgrade ($19/mo)</button>
+        <button class="primary" id="proConfirmBtn" type="button">Upgrade · $19/mo</button>
         <button class="ghost" id="proCloseBtn" type="button">Maybe later</button>
+      </div>
+    </div>
+
+    <!-- Profile detail modal -->
+    <div id="detailModal" class="modal detail-modal" hidden>
+      <div class="detail-card glass">
+        <button class="detail-close" id="detailCloseBtn" type="button">✕</button>
+        <div class="detail-gallery" id="detailGallery"></div>
+        <div class="detail-body" id="detailBody"></div>
       </div>
     </div>
 

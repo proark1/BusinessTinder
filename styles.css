@@ -10,7 +10,7 @@
   --border-strong: rgba(255, 255, 255, 0.14);
   --text: #f4f1ff;
   --text-2: #b8b1d4;
-  --muted: #847ca0;
+  --muted: #9c93bd;
   --brand-1: #7c5cff;
   --brand-2: #ff5cc8;
   --brand-soft: rgba(124, 92, 255, 0.18);
@@ -396,6 +396,31 @@ input:focus, textarea:focus, select:focus {
 .settings-row:last-child { border-bottom: 0; }
 .settings-label { color: var(--text); font-weight: 600; font-size: 0.94rem; }
 .settings-sub { color: var(--muted); font-size: 0.82rem; }
+
+/* ---------- Super-like, verify banner, Pro modal social proof ---------- */
+.action.superlike { background: linear-gradient(160deg, #1c2f6a 0%, #6d3aa0 100%); }
+.card.superlike { box-shadow: 0 0 0 3px var(--brand-1) inset, var(--shadow-card); }
+.superlike-badge { position: absolute; left: 16px; top: 16px; background: var(--grad); color: white; border: 0; border-radius: 999px; padding: 4px 10px; font-size: .72rem; font-weight: 800; letter-spacing: .04em; }
+
+.verify-banner {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  background: rgba(255, 184, 108, 0.14); border: 1px solid rgba(255, 184, 108, 0.4);
+  color: #ffe1b8; padding: 10px 12px; border-radius: 12px; margin-bottom: 10px; font-size: .88rem;
+}
+
+.verified-pill { display: inline-flex; align-items: center; gap: 4px; background: rgba(40, 216, 146, 0.18); color: var(--good); border: 1px solid rgba(40, 216, 146, 0.4); border-radius: 999px; padding: 2px 7px; font-size: .7rem; font-weight: 700; margin-left: 6px; vertical-align: middle; }
+
+.pro-feature-list { list-style: none; padding: 0; }
+.pro-feature-list li { display: flex; gap: 8px; align-items: center; padding: 4px 0; color: var(--text); }
+.pro-check { color: var(--good); font-weight: 800; }
+.pro-quote { margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--brand-1); color: var(--text-2); font-style: italic; background: rgba(124, 92, 255, 0.08); border-radius: 6px; font-size: .88rem; }
+.pro-quote small { display: block; margin-top: 4px; color: var(--muted); font-style: normal; }
+
+.chip-limit-msg { color: var(--warn); font-size: .76rem; margin-top: -6px; }
+
+.filter-chip-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.filter-chip { background: var(--brand-soft); color: var(--text); border: 1px solid rgba(124, 92, 255, 0.4); border-radius: 999px; padding: 4px 10px; font-size: .76rem; display: inline-flex; align-items: center; gap: 6px; }
+.filter-chip button { background: transparent; border: 0; color: var(--muted); padding: 0 0 0 4px; cursor: pointer; }
 
 /* ---------- Misc ---------- */
 .center { text-align: center; }

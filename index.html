@@ -46,7 +46,24 @@
             <label>Email<input required type="email" name="email" autocomplete="email" /></label>
             <label>Password<input required type="password" name="password" autocomplete="current-password" /></label>
             <button class="primary" type="submit">Log in</button>
+            <p class="center"><a href="#" id="forgotLink" style="font-size:.86rem;">Forgot password?</a></p>
             <p class="auth-error" id="loginError" hidden></p>
+          </form>
+
+          <form id="forgotForm" class="form-grid" hidden>
+            <h3 style="color:var(--text);">Reset your password</h3>
+            <label>Email<input required type="email" name="email" autocomplete="email" /></label>
+            <button class="primary" type="submit">Send reset link</button>
+            <button class="ghost" type="button" id="forgotCancel">Back to log in</button>
+            <p class="auth-error" id="forgotError" hidden></p>
+            <p class="hint" id="forgotHint" hidden></p>
+          </form>
+
+          <form id="resetForm" class="form-grid" hidden>
+            <h3 style="color:var(--text);">Pick a new password</h3>
+            <label>New password<input required type="password" name="password" minlength="6" autocomplete="new-password" /></label>
+            <button class="primary" type="submit">Save and log in</button>
+            <p class="auth-error" id="resetError" hidden></p>
           </form>
 
           <form id="registerForm" class="form-grid" hidden>
@@ -191,6 +208,10 @@
 
         <!-- ========== DISCOVER ========== -->
         <section id="view-swipe" class="view">
+          <div id="verifyBanner" class="verify-banner" hidden>
+            <span>📩 Verify your email to unlock matching.</span>
+            <button type="button" id="verifyDevLinkBtn" class="ghost">Open link</button>
+          </div>
           <div class="filters glass pad-sm">
             <div class="filter-row">
               <input id="searchInput" type="search" placeholder="Search by name, company, skill…" />
@@ -239,12 +260,13 @@
             <p>Try broadening the filters above, invite a friend with your referral code, or check back later.</p>
             <button class="primary" id="emptyResetBtn" type="button">Clear filters</button>
           </section>
-          <section class="actions">
-            <button class="action undo" id="undoBtn" aria-label="Undo">↺</button>
-            <button class="action left" id="leftBtn" aria-label="Pass">✕</button>
-            <button class="action detail" id="detailBtn" aria-label="Details">ⓘ</button>
-            <button class="action right" id="rightBtn" aria-label="Like">❤</button>
-            <button class="action save" id="saveBtn" aria-label="Save">★</button>
+          <section class="actions" role="toolbar" aria-label="Swipe actions">
+            <button class="action undo" id="undoBtn" aria-label="Undo last swipe (Z)" title="Undo (Z)">↺</button>
+            <button class="action left" id="leftBtn" aria-label="Pass (left arrow)" title="Pass (←)">✕</button>
+            <button class="action superlike" id="superLikeBtn" aria-label="Super-like (up arrow)" title="Super-like (↑)">★</button>
+            <button class="action right" id="rightBtn" aria-label="Like (right arrow)" title="Like (→)">❤</button>
+            <button class="action detail" id="detailBtn" aria-label="Show profile detail (D)" title="Detail (D)">ⓘ</button>
+            <button class="action save" id="saveBtn" aria-label="Save to shortlist (S)" title="Save (S)">＋</button>
           </section>
           <p id="statusText" class="status">Swipe to discover your next business match.</p>
           <div id="matchToast" class="toast" aria-live="polite"></div>
@@ -329,6 +351,23 @@
             </div>
             <button id="logoutBtn" class="ghost" type="button">Log out</button>
           </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Blocked users</div>
+              <div class="settings-sub" id="blockedSummary">Manage who can't see or message you.</div>
+            </div>
+            <button id="manageBlocksBtn" class="ghost" type="button">Manage</button>
+          </div>
+          <div id="blockedListWrap" hidden style="margin-top:8px;">
+            <ul id="blockedList" class="list"></ul>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label" style="color:#ff8c9b;">Delete account</div>
+              <div class="settings-sub">Permanently erase your profile and data. This cannot be undone.</div>
+            </div>
+            <button id="deleteAccountBtn" class="ghost" type="button" style="color:#ff8c9b;border-color:rgba(255,101,121,.4);">Delete</button>
+          </div>
         </section>
       </main>
 
@@ -373,7 +412,7 @@
     </template>
 
     <!-- Match modal -->
-    <div id="matchModal" class="modal" hidden>
+    <div id="matchModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="matchModalText">
       <div class="modal-card glass pad">
         <h2>✨ It's a match</h2>
         <p id="matchModalText"></p>
@@ -385,22 +424,25 @@
     </div>
 
     <!-- Pro modal -->
-    <div id="proModal" class="modal" hidden>
+    <div id="proModal" class="modal" hidden role="dialog" aria-modal="true">
       <div class="modal-card glass pad">
-        <h2>Upgrade to Pro</h2>
-        <ul>
-          <li>Unlimited swipes</li>
-          <li>See everyone who liked you</li>
-          <li>Advanced filters &amp; verified badge</li>
-          <li>Video calls in-app (coming)</li>
+        <h2>Go Pro</h2>
+        <p class="hint">Pro members match 3× more often.</p>
+        <ul class="pro-feature-list">
+          <li><span class="pro-check">✓</span> Unlimited swipes</li>
+          <li><span class="pro-check">✓</span> See everyone who liked you</li>
+          <li><span class="pro-check">✓</span> 5 super-likes / day (3× match rate)</li>
+          <li><span class="pro-check">✓</span> Advanced filters &amp; verified badge</li>
+          <li><span class="pro-check">✓</span> Priority placement in the deck</li>
         </ul>
+        <blockquote class="pro-quote">"Found my technical co-founder in week 2. We've raised seed."<br/><small>— Avery C., founder at Pellicle.</small></blockquote>
         <button class="primary" id="proConfirmBtn" type="button">Upgrade · $19/mo</button>
         <button class="ghost" id="proCloseBtn" type="button">Maybe later</button>
       </div>
     </div>
 
     <!-- Profile detail modal -->
-    <div id="detailModal" class="modal detail-modal" hidden>
+    <div id="detailModal" class="modal detail-modal" hidden role="dialog" aria-modal="true">
       <div class="detail-card glass">
         <button class="detail-close" id="detailCloseBtn" type="button">✕</button>
         <div class="detail-gallery" id="detailGallery"></div>

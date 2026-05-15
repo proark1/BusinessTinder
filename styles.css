@@ -64,3 +64,16 @@ select { width:100%; border-radius:10px; border:1px solid #2a344c; background:#1
 .undo { background:#2a2f44; }
 .toast { min-height:24px; text-align:center; color:#7ff1bf; font-weight:700; margin-top:6px; opacity:0; transition:opacity .2s ease; }
 .toast.show { opacity:1; }
+
+.google-wrap { margin: 12px 0; display: flex; justify-content: center; min-height: 44px; }
+.auth-tabs { display: flex; gap: 8px; margin: 18px 0 10px; }
+.auth-tab { flex: 1; background: #151b2b; color: #d9e1ff; border: 0; border-radius: 10px; padding: 10px; font-weight: 600; }
+.auth-tab.active { background: #27345a; }
+.auth-form { margin-top: 6px; }
+.auth-error { color: #ff8c9b; font-size: .86rem; margin: 4px 0 0; }
+.chip-set { border: 1px solid #2a344c; border-radius: 12px; padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 8px; background: #111624; }
+.chip-set legend { color: #cfd6ef; font-size: .82rem; padding: 0 6px; }
+.chip-set label { display: inline-flex; align-items: center; gap: 6px; background: #1a2238; padding: 6px 10px; border-radius: 999px; border: 1px solid #2a344c; font-size: .82rem; color: #dde3f8; cursor: pointer; }
+.chip-set input[type="checkbox"] { accent-color: var(--accent); }
+.row-check { flex-direction: row; align-items: center; gap: 8px; }
+.row-check input { width: auto; }

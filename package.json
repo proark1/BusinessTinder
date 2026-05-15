@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "start:api": "node backend/server.js"
+    "start:api": "node backend/src/server.js",
+    "start": "node backend/src/server.js"
   }
 }

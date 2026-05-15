@@ -18,8 +18,8 @@ app.use(cors());
 app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
-const DATABASE_URL = process.env.DATABASE_URL;
-const prisma = DATABASE_URL && PrismaClient ? new PrismaClient() : null;
+const DATABASE_URL = process.env.DATABASE_URL || process.env.RAILWAY_DATABASE_URL;
+const prisma = DATABASE_URL && PrismaClient ? new PrismaClient({ datasources: { db: { url: DATABASE_URL } } }) : null;
 const mem = { users: [], profiles: [], swipes: [], matches: [], conversations: [], messages: [] };
 const clients = new Map();
 

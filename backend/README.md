@@ -30,8 +30,17 @@ The Express variant adds:
 
 ## Runtime modes
 
-- If `DATABASE_URL` is set and `@prisma/client` is installed, the server uses Prisma against PostgreSQL.
+- If `DATABASE_URL` (or `RAILWAY_DATABASE_URL`) is set and `@prisma/client` is installed, the server uses Prisma against PostgreSQL.
 - Otherwise it falls back to in-memory storage for quick local demos.
+
+### Railway PostgreSQL
+
+Railway typically injects `DATABASE_URL` automatically when your service is linked to a PostgreSQL database. If your project uses `RAILWAY_DATABASE_URL` instead, this backend also supports it out of the box.
+
+Recommended Railway variables:
+
+- `DATABASE_URL=${{Postgres.DATABASE_URL}}` (or keep Railway's default injected value)
+- `JWT_SECRET=<strong-random-secret>`
 
 ## Run
 

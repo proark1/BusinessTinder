@@ -176,7 +176,23 @@ function renderMatches() {
   }
   state.matches.forEach((m) => {
     const li = document.createElement("li");
-    li.innerHTML = `<span>${m.name} · ${m.role}</span><div class='row-actions'><button class='primary' data-chat='${m.id}'>Chat</button><button data-unmatch='${m.id}'>Unmatch</button><button class='warn' data-report='${m.id}'>Report</button></div>`;
+    const label = document.createElement("span");
+    label.textContent = `${m.name} · ${m.role}`;
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    const chatBtn = document.createElement("button");
+    chatBtn.className = "primary";
+    chatBtn.dataset.chat = String(m.id);
+    chatBtn.textContent = "Chat";
+    const unmatchBtn = document.createElement("button");
+    unmatchBtn.dataset.unmatch = String(m.id);
+    unmatchBtn.textContent = "Unmatch";
+    const reportBtn = document.createElement("button");
+    reportBtn.className = "warn";
+    reportBtn.dataset.report = String(m.id);
+    reportBtn.textContent = "Report";
+    actions.append(chatBtn, unmatchBtn, reportBtn);
+    li.append(label, actions);
     matchesList.appendChild(li);
   });
 }

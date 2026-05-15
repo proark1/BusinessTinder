@@ -8,9 +8,14 @@ export function hashPassword(password, salt = crypto.randomBytes(16).toString('h
 }
 
 export function verifyPassword(password, stored) {
-  const [salt, original] = String(stored).split(':');
+  if (typeof stored !== 'string' || !stored.includes(':')) return false;
+  const [salt, original] = stored.split(':');
+  if (!salt || !original) return false;
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(original));
+  const hashBuf = Buffer.from(hash, 'hex');
+  const origBuf = Buffer.from(original, 'hex');
+  if (hashBuf.length !== origBuf.length) return false;
+  return crypto.timingSafeEqual(hashBuf, origBuf);
 }
 
 export function signToken(payload) {
@@ -23,6 +28,13 @@ export function verifyToken(token) {
   const [data, sig] = String(token || '').split('.');
   if (!data || !sig) return null;
   const expected = crypto.createHmac('sha256', TOKEN_SECRET).update(data).digest('base64url');
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
-  return JSON.parse(Buffer.from(data, 'base64url').toString('utf8'));
+  const sigBuf = Buffer.from(sig);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length) return null;
+  if (!crypto.timingSafeEqual(sigBuf, expBuf)) return null;
+  try {
+    return JSON.parse(Buffer.from(data, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
 }

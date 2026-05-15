@@ -77,3 +77,51 @@ select { width:100%; border-radius:10px; border:1px solid #2a344c; background:#1
 .chip-set input[type="checkbox"] { accent-color: var(--accent); }
 .row-check { flex-direction: row; align-items: center; gap: 8px; }
 .row-check input { width: auto; }
+
+.liked-badge { background: #43175e; color: #ffd1f0; border: 0; border-radius: 999px; padding: 4px 10px; font-size: .78rem; font-weight: 700; }
+.plan-badge { font-weight: 700; }
+.plan-badge.pro { background: linear-gradient(90deg, #6d7dff, #c870ff); color: white; border: 0; }
+
+.filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.filter-row select, .filter-row input[type="search"] { flex: 1; }
+.quota { color: #ffba8a; font-size: .78rem; margin: 4px 0 0; }
+
+.score-pill { position: absolute; left: 16px; top: 16px; background: rgba(40,216,146,.18); color: var(--good); border: 1px solid var(--good); border-radius: 999px; padding: 3px 8px; font-size: .78rem; font-weight: 700; }
+.card .reasons { color: #8cf2bf; font-size: .78rem; margin-top: 4px; }
+
+.photo-preview { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; margin-top: 6px; border: 2px solid #2a344c; }
+
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.grid-card { padding: 10px; border-radius: 14px; text-align: center; cursor: pointer; }
+.grid-card img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; }
+.grid-card h3 { margin: 8px 0 2px; font-size: .95rem; }
+.grid-card .role { font-size: .76rem; color: #ccd4ec; margin: 0; }
+.grid-card .meta { font-size: .72rem; color: #99a4c1; margin: 2px 0; }
+.grid-card .score { font-size: .72rem; color: var(--good); margin: 2px 0 0; }
+
+.save { background:#2a2244; color:#ffd6a8; }
+
+.modal { position: fixed; inset: 0; background: rgba(5,8,16,.7); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+.modal-card { max-width: 380px; width: 100%; border-radius: 18px; }
+.modal-card h2 { margin-top: 0; }
+.icebreaker-list { list-style: none; padding: 0; display: grid; gap: 8px; }
+.icebreaker-list li { background: #1a2238; padding: 10px 12px; border-radius: 12px; border: 1px solid #2a344c; cursor: pointer; font-size: .9rem; }
+.icebreaker-list li:hover { background: #243054; }
+.modal-card button { margin-top: 8px; width: 100%; }
+
+.icebreakers { display: grid; gap: 6px; margin-bottom: 10px; }
+.icebreakers button { background: #1a2238; color: #dde3f8; border: 1px solid #2a344c; border-radius: 10px; padding: 8px 10px; text-align: left; font-size: .86rem; cursor: pointer; }
+.chat-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.chat-actions .ghost { flex: 1; }
+.typing { color: #99a4c1; font-size: .78rem; margin: 2px 0 6px; }
+
+.liked-box { display: grid; gap: 8px; }
+.liked-row { display: flex; align-items: center; gap: 10px; background: #12182a; border: 1px solid #27324f; border-radius: 12px; padding: 8px; }
+.liked-row img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
+
+.card-overlay-menu { position: absolute; right: 12px; bottom: 12px; background: #1a2238; border: 1px solid #2a344c; border-radius: 10px; padding: 4px; display: flex; gap: 4px; z-index: 20; }
+.card-overlay-menu button { background: transparent; color: #ffd8de; border: 0; padding: 6px 10px; border-radius: 8px; }
+.card-overlay-menu button:hover { background: #2a344c; }
+
+.public-card { max-width: 480px; margin: 30px auto; }
+.public-avatar { width: 120px; height: 120px; border-radius: 50%; object-fit: cover; }

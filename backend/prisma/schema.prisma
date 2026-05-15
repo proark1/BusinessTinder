@@ -8,38 +8,53 @@ datasource db {
 }
 
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  passwordHash String
-  fullName     String
-  googleSub    String?   @unique
-  avatarUrl    String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  profile      Profile?
-  sentSwipes   Swipe[]   @relation("sent")
-  recvSwipes   Swipe[]   @relation("recv")
-  messages     Message[]
+  id             String    @id @default(cuid())
+  email          String    @unique
+  passwordHash   String
+  fullName       String
+  googleSub      String?   @unique
+  avatarUrl      String?
+  planTier       String    @default("FREE")
+  referralCode   String?   @unique
+  referredBy     String?
+  lastSwipeDay   String?
+  swipesToday    Int       @default(0)
+  notifPushOptIn Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  profile        Profile?
+  sentSwipes     Swipe[]   @relation("sent")
+  recvSwipes     Swipe[]   @relation("recv")
+  messages       Message[]
+  pushSubs       PushSubscription[]
 }
 
 model Profile {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  headline    String
-  userType    String
-  lookingFor  String[]
-  bio         String
-  stage       String
-  industries  String[]
-  skills      String[]
-  location    String
-  remoteOk    Boolean  @default(false)
-  commitment  String?
-  linkedinUrl String?
-  avatarUrl   String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  user        User     @relation(fields: [userId], references: [id])
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  slug          String   @unique
+  headline      String
+  userType      String
+  lookingFor    String[]
+  bio           String
+  stage         String
+  industries    String[]
+  skills        String[]
+  location      String
+  remoteOk      Boolean  @default(false)
+  commitment    String?
+  linkedinUrl   String?
+  avatarUrl     String?
+  photoUrl      String?
+  videoIntroUrl String?
+  pastCompanies String[]
+  hoursPerWeek  Int?
+  calLink       String?
+  pitchDeckUrl  String?
+  lastActiveAt  DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id])
 }
 
 model Swipe {
@@ -76,9 +91,46 @@ model Message {
   senderId       String
   body           String
   status         MessageStatus @default(SENT)
+  kind           String        @default("text")
   createdAt      DateTime      @default(now())
   conversation   Conversation  @relation(fields: [conversationId], references: [id])
   sender         User          @relation(fields: [senderId], references: [id])
+}
+
+model SavedProfile {
+  id              String   @id @default(cuid())
+  userId          String
+  profileUserId   String
+  createdAt       DateTime @default(now())
+
+  @@unique([userId, profileUserId])
+}
+
+model Report {
+  id         String   @id @default(cuid())
+  reporterId String
+  targetId   String
+  reason     String?
+  createdAt  DateTime @default(now())
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  blockerId String
+  targetId  String
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, targetId])
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
 }
 
 enum SwipeDirection {

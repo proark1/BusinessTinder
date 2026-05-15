@@ -12,7 +12,9 @@
     <div class="app-shell">
       <header class="topbar glass" id="topbar" hidden>
         <h1>BusinessTinder</h1>
-        <span id="completionBadge" class="completion">0% profile</span>
+        <button id="likedBadge" class="liked-badge" hidden>♥ <span id="likedCount">0</span></button>
+        <button id="planBadge" class="plan-badge ghost" hidden>FREE</button>
+        <button id="settingsBtn" class="ghost" aria-label="Settings">⚙</button>
         <button id="logoutBtn" class="ghost" aria-label="Log out">Log out</button>
       </header>
 
@@ -22,9 +24,7 @@
           <p class="hint">Match with founders, co-founders, operators and investors.</p>
 
           <div id="googleBtnWrap" class="google-wrap"></div>
-          <p id="googleDisabledNote" class="hint" hidden>
-            Google sign-in is not configured on this server.
-          </p>
+          <p id="googleDisabledNote" class="hint" hidden>Google sign-in not configured.</p>
 
           <div class="auth-tabs">
             <button class="auth-tab active" data-auth-tab="login">Log in</button>
@@ -42,6 +42,7 @@
             <label>Full name<input required name="fullName" autocomplete="name" /></label>
             <label>Email<input required type="email" name="email" autocomplete="email" /></label>
             <label>Password<input required type="password" name="password" minlength="6" autocomplete="new-password" /></label>
+            <label>Referral code (optional)<input name="referredBy" placeholder="Friend's code" /></label>
             <button class="primary" type="submit">Create account</button>
             <p class="auth-error" id="registerError" hidden></p>
           </form>
@@ -51,9 +52,12 @@
           <h2>Build your profile</h2>
           <p class="hint">Just enough so people can decide whether to match with you.</p>
           <form id="onboardingForm" class="form-grid">
-            <label>Headline
-              <input required maxlength="80" name="headline" placeholder="Technical co-founder, ex-Stripe" />
+            <label>Profile photo
+              <input type="file" id="photoInput" name="photoFile" accept="image/*" />
+              <img id="photoPreview" class="photo-preview" hidden alt="" />
             </label>
+
+            <label>Headline<input required maxlength="80" name="headline" placeholder="Technical co-founder, ex-Stripe" /></label>
 
             <label>I am a…
               <select required name="userType">
@@ -77,9 +81,7 @@
               <label><input type="checkbox" value="networking" /> Networking</label>
             </fieldset>
 
-            <label>What you're building (short)
-              <textarea required name="bio" rows="3" maxlength="240" placeholder="One or two sentences. What problem, who for."></textarea>
-            </label>
+            <label>What you're building<textarea required name="bio" rows="3" maxlength="240"></textarea></label>
 
             <label>Stage
               <select required name="stage">
@@ -117,8 +119,12 @@
               <label><input type="checkbox" value="Capital" /> Capital</label>
             </fieldset>
 
+            <label>Past companies (comma-separated)<input name="pastCompaniesText" placeholder="Stripe, Anthropic" /></label>
+
             <label>Location<input required name="location" placeholder="Berlin" /></label>
             <label class="row-check"><input type="checkbox" name="remoteOk" /> Open to remote</label>
+
+            <label>Hours per week available<input type="number" name="hoursPerWeek" min="0" max="80" placeholder="40" /></label>
 
             <label>Commitment
               <select name="commitment">
@@ -129,9 +135,9 @@
               </select>
             </label>
 
-            <label>LinkedIn URL (optional)
-              <input type="url" name="linkedinUrl" placeholder="https://linkedin.com/in/…" />
-            </label>
+            <label>LinkedIn URL<input type="url" name="linkedinUrl" placeholder="https://linkedin.com/in/…" /></label>
+            <label>Cal.com / Calendly link<input type="url" name="calLink" placeholder="https://cal.com/you" /></label>
+            <label>Pitch deck URL<input type="url" name="pitchDeckUrl" placeholder="https://…" /></label>
 
             <button type="submit" class="primary">Save and start matching</button>
             <p class="auth-error" id="onboardingError" hidden></p>
@@ -140,9 +146,26 @@
 
         <section id="view-swipe" class="view">
           <div class="filters glass pad-sm">
-            <label>Industry
+            <div class="filter-row">
+              <select id="filterStage">
+                <option value="">Any stage</option>
+                <option value="idea">Idea</option>
+                <option value="mvp">MVP</option>
+                <option value="live">Live</option>
+                <option value="revenue">Revenue</option>
+                <option value="scaling">Scaling</option>
+              </select>
+              <select id="filterLookingFor">
+                <option value="">Any goal</option>
+                <option value="cofounder">Co-founder</option>
+                <option value="hires">Hires</option>
+                <option value="customers">Customers</option>
+                <option value="investors">Investors</option>
+                <option value="advisors">Advisors</option>
+                <option value="partnerships">Partnerships</option>
+              </select>
               <select id="industryFilter">
-                <option value="all">All</option>
+                <option value="all">Any industry</option>
                 <option value="AI">AI</option>
                 <option value="FinTech">FinTech</option>
                 <option value="HealthTech">HealthTech</option>
@@ -153,13 +176,21 @@
                 <option value="B2B SaaS">B2B SaaS</option>
                 <option value="Web3">Web3</option>
               </select>
-            </label>
+            </div>
+            <div class="filter-row">
+              <input id="searchInput" type="search" placeholder="Search by name, company, skill…" />
+              <button id="viewToggle" class="ghost" type="button" data-mode="cards">Grid</button>
+            </div>
+            <p id="quotaText" class="quota" hidden></p>
           </div>
           <section id="deck" class="deck" aria-live="polite"></section>
+          <section id="grid" class="grid" hidden></section>
+          <section id="searchResults" class="grid" hidden></section>
           <section class="actions">
             <button class="action left" id="leftBtn" aria-label="Pass">✕</button>
             <button class="action right" id="rightBtn" aria-label="Like">❤</button>
             <button class="action undo" id="undoBtn" aria-label="Undo">↺</button>
+            <button class="action save" id="saveBtn" aria-label="Save">☆</button>
           </section>
           <p id="statusText" class="status">Swipe to discover your next business match.</p>
           <div id="matchToast" class="toast" aria-live="polite"></div>
@@ -168,16 +199,39 @@
         <section id="view-matches" class="view glass pad">
           <h2>Your Matches</h2>
           <ul id="matchesList" class="list"></ul>
-          <p class='hint'>You can unmatch or report from each row.</p>
+          <h3 style="margin-top:18px;">Shortlist</h3>
+          <ul id="savedList" class="list"></ul>
+          <h3 style="margin-top:18px;">Who liked you</h3>
+          <div id="likedYouBox" class="liked-box"></div>
+          <p class='hint'>You can unmatch, save, block or report from each row.</p>
         </section>
 
         <section id="view-chat" class="view glass pad">
           <h2 id="chatTitle">Chat</h2>
+          <div id="icebreakerBox" class="icebreakers" hidden></div>
           <div id="messages" class="messages"></div>
+          <p id="typingIndicator" class="typing" hidden>typing…</p>
+          <div id="chatActions" class="chat-actions">
+            <button id="bookCallBtn" class="ghost" type="button" hidden>📅 Book a call</button>
+            <button id="requestVideoBtn" class="ghost" type="button">🎥 Request video call</button>
+          </div>
           <form id="chatForm" class="chat-form">
             <input id="chatInput" placeholder="Type a message" />
             <button class="primary" type="submit">Send</button>
           </form>
+        </section>
+
+        <section id="view-settings" class="view glass pad">
+          <h2>Settings</h2>
+          <p class="hint">Plan: <strong id="settingsPlan">FREE</strong></p>
+          <button id="upgradeBtn" class="primary">Upgrade to Pro</button>
+          <p class="hint" style="margin-top:14px;">Your referral code:</p>
+          <p><code id="settingsReferral">—</code> · <button id="copyReferralBtn" class="ghost" type="button">Copy</button></p>
+          <p class="hint" style="margin-top:14px;">
+            <button id="enablePushBtn" class="ghost" type="button">Enable push notifications</button>
+            <button id="installAppBtn" class="ghost" type="button" hidden>Install app</button>
+          </p>
+          <p class="hint" style="margin-top:14px;">Public profile: <a id="publicProfileLink" href="#" target="_blank">—</a></p>
         </section>
       </main>
 
@@ -185,12 +239,14 @@
         <button data-view="swipe" class="tab active">Discover</button>
         <button data-view="matches" class="tab">Matches</button>
         <button data-view="onboarding" class="tab">Profile</button>
+        <button data-view="settings" class="tab">Settings</button>
       </nav>
     </div>
 
     <template id="cardTemplate">
       <article class="card">
         <div class="badge"></div>
+        <div class="score-pill" hidden></div>
         <img class="avatar" alt="" />
         <div class="card-content">
           <h2></h2>
@@ -199,9 +255,39 @@
           <p class="bio"></p>
           <ul class="tags"></ul>
           <p class="goal"></p>
+          <p class="reasons"></p>
+        </div>
+        <div class="card-overlay-menu" hidden>
+          <button class="card-menu-block" type="button">Block</button>
+          <button class="card-menu-report" type="button">Report</button>
         </div>
       </article>
     </template>
+
+    <div id="matchModal" class="modal" hidden>
+      <div class="modal-card glass pad">
+        <h2>✨ New match</h2>
+        <p id="matchModalText"></p>
+        <p class="hint">Break the ice:</p>
+        <ul id="matchModalIcebreakers" class="icebreaker-list"></ul>
+        <button class="primary" id="matchModalChat" type="button">Open chat</button>
+        <button class="ghost" id="matchModalClose" type="button">Later</button>
+      </div>
+    </div>
+
+    <div id="proModal" class="modal" hidden>
+      <div class="modal-card glass pad">
+        <h2>Upgrade to Pro</h2>
+        <ul>
+          <li>Unlimited swipes</li>
+          <li>See everyone who liked you</li>
+          <li>Advanced filters &amp; verified badge</li>
+          <li>Video calls in-app (coming)</li>
+        </ul>
+        <button class="primary" id="proConfirmBtn" type="button">Upgrade ($19/mo)</button>
+        <button class="ghost" id="proCloseBtn" type="button">Maybe later</button>
+      </div>
+    </div>
 
     <script src="script.js" type="module"></script>
     <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");</script>

@@ -26,12 +26,17 @@
       </header>
 
       <main>
-        <!-- ========== AUTH ========== -->
+        <!-- ========== AUTH / LANDING ========== -->
         <section id="view-auth" class="view active glass pad">
-          <div class="center" style="margin-bottom:14px;">
-            <img src="/icon.svg" alt="" width="68" height="68" style="filter:drop-shadow(0 10px 30px rgba(124,92,255,.5));" />
-            <h1 style="margin-top:14px;">Welcome to <span class="brand-name">BusinessTinder</span></h1>
-            <p class="hint">Match with founders, co-founders, operators &amp; investors.</p>
+          <div class="landing-hero center">
+            <img src="/icon.svg" alt="" width="72" height="72" class="landing-logo" />
+            <h1 class="landing-headline">The fastest way to find your <span class="brand-name">co-founder, investor or first hire</span>.</h1>
+            <p class="landing-sub">Swipe-first, profile-rich, built for founders. Match on what actually matters — stage, skills, industry.</p>
+            <ul class="landing-bullets">
+              <li><span class="pro-check">✓</span> Profile prompts that surface real intent</li>
+              <li><span class="pro-check">✓</span> Smart matching with explainable score</li>
+              <li><span class="pro-check">✓</span> See who liked you · super-likes · Cal.com booking</li>
+            </ul>
           </div>
 
           <div id="googleBtnWrap" class="google-wrap"></div>
@@ -115,9 +120,15 @@
             <!-- Step 2: what you're building -->
             <div class="wizard-step" data-step="2">
               <h2>What are you building?</h2>
-              <p class="hint">Two sentences. The clearer the better.</p>
+              <p class="hint">Two sentences plus a few quick prompts — that's all anyone reads.</p>
 
               <label>One-liner<textarea required name="bio" rows="3" maxlength="240" placeholder="AI-native spend governance for remote-first teams."></textarea></label>
+
+              <div id="promptsEditor" class="prompts-editor">
+                <p class="hint" style="margin:0;">Pick 1–3 prompts to answer (optional but recommended).</p>
+                <div id="promptsList"></div>
+                <button type="button" id="addPromptBtn" class="ghost">+ Add a prompt</button>
+              </div>
 
               <label>Stage
                 <select required name="stage">
@@ -278,6 +289,7 @@
           <div class="tabs-row">
             <button class="tab-btn active" data-pane="matches">Matches <span id="matchesCount"></span></button>
             <button class="tab-btn" data-pane="liked">Liked you <span id="likedYouCount"></span></button>
+            <button class="tab-btn" data-pane="views">Viewed you <span id="viewsCount"></span></button>
             <button class="tab-btn" data-pane="saved">Shortlist <span id="savedCount"></span></button>
           </div>
           <div class="tab-pane active" data-pane="matches">
@@ -285,6 +297,9 @@
           </div>
           <div class="tab-pane" data-pane="liked">
             <div id="likedYouBox" class="liked-box"></div>
+          </div>
+          <div class="tab-pane" data-pane="views">
+            <div id="viewsBox" class="liked-box"></div>
           </div>
           <div class="tab-pane" data-pane="saved">
             <ul id="savedList" class="list"></ul>
@@ -310,6 +325,15 @@
         <!-- ========== SETTINGS ========== -->
         <section id="view-settings" class="view glass pad">
           <h2>Settings</h2>
+
+          <div class="completion-card">
+            <div class="completion-ring" id="completionRing" style="--p:0;"><span id="completionPct">0%</span></div>
+            <div>
+              <div class="settings-label" style="font-size:1rem;">Profile completion</div>
+              <p class="settings-sub" id="completionTip">Add a photo and a couple of prompts to get 4× more views.</p>
+            </div>
+          </div>
+
           <div class="settings-row">
             <div>
               <div class="settings-label">Plan</div>

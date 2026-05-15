@@ -36,32 +36,44 @@ model User {
 }
 
 model Profile {
-  id            String   @id @default(cuid())
-  userId        String   @unique
-  slug          String   @unique
-  headline      String
-  userType      String
-  lookingFor    String[]
-  bio           String
-  stage         String
-  industries    String[]
-  skills        String[]
-  location      String
-  remoteOk      Boolean  @default(false)
-  commitment    String?
-  linkedinUrl   String?
-  avatarUrl     String?
-  photoUrl      String?
-  photos        String[]
-  videoIntroUrl String?
-  pastCompanies String[]
-  hoursPerWeek  Int?
-  calLink       String?
-  pitchDeckUrl  String?
-  lastActiveAt  DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  slug           String   @unique
+  headline       String
+  userType       String
+  lookingFor     String[]
+  bio            String
+  stage          String
+  industries     String[]
+  skills         String[]
+  location       String
+  remoteOk       Boolean  @default(false)
+  commitment     String?
+  linkedinUrl    String?
+  avatarUrl      String?
+  photoUrl       String?
+  photos         String[]
+  videoIntroUrl  String?
+  pastCompanies  String[]
+  hoursPerWeek   Int?
+  calLink        String?
+  pitchDeckUrl   String?
+  promptIds      String[]
+  promptAnswers  String[]
+  lastActiveAt   DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ProfileView {
+  id        String   @id @default(cuid())
+  viewerId  String
+  viewedId  String
+  createdAt DateTime @default(now())
+
+  @@index([viewedId, createdAt])
+  @@index([viewerId, viewedId])
 }
 
 model Swipe {

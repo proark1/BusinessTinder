@@ -75,7 +75,27 @@ const mem = {
   blocks: [],
   pushSubs: [],
 };
-const wsClients = new Map();
+const wsClients = new Map(); // userId -> Set<WebSocket>
+
+function addWsClient(userId, ws) {
+  if (!wsClients.has(userId)) wsClients.set(userId, new Set());
+  wsClients.get(userId).add(ws);
+}
+function removeWsClient(userId, ws) {
+  const set = wsClients.get(userId);
+  if (!set) return;
+  set.delete(ws);
+  if (set.size === 0) wsClients.delete(userId);
+}
+function sendToUser(userId, payload) {
+  const set = wsClients.get(userId);
+  if (!set || set.size === 0) return false;
+  const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  for (const ws of set) {
+    try { ws.send(json); } catch {}
+  }
+  return true;
+}
 
 function publicUser(user) {
   if (!user) return null;
@@ -175,6 +195,21 @@ async function canAccessConversation(userId, conversationId) {
   if (!convo) return false;
   const m = mem.matches.find((x) => x.id === convo.matchId);
   return !!m && (m.userAId === userId || m.userBId === userId);
+}
+
+async function otherUserInConversation(userId, conversationId) {
+  let convo, match;
+  if (prisma) {
+    convo = await prisma.conversation.findUnique({ where: { id: conversationId } });
+    if (!convo) return null;
+    match = await prisma.match.findUnique({ where: { id: convo.matchId } });
+  } else {
+    convo = mem.conversations.find((c) => c.id === conversationId);
+    if (!convo) return null;
+    match = mem.matches.find((m) => m.id === convo.matchId);
+  }
+  if (!match) return null;
+  return match.userAId === userId ? match.userBId : match.userAId;
 }
 
 async function pushToUser(userId, payload) {
@@ -329,9 +364,11 @@ function sanitizeProfile(body) {
   if (Array.isArray(out.photos)) out.photos = out.photos.filter(Boolean).slice(0, 5);
   if (Array.isArray(out.photos) && out.photos.length && !out.photoUrl) out.photoUrl = out.photos[0];
   if (out.hoursPerWeek != null) out.hoursPerWeek = Math.max(0, Math.min(80, Number(out.hoursPerWeek) || 0));
-  if (typeof out.bio === 'string') {
-    const mod = moderateText(out.bio);
-    if (!mod.ok) return { error: `Bio rejected: ${mod.reason}` };
+  for (const field of ['headline', 'bio']) {
+    if (typeof out[field] === 'string') {
+      const mod = moderateText(out[field]);
+      if (!mod.ok) return { error: `${field} rejected: ${mod.reason}` };
+    }
   }
   return out;
 }
@@ -377,15 +414,21 @@ app.get('/discover', auth, async (req, res) => {
     industry: req.query.industry && req.query.industry !== 'all' ? req.query.industry : null,
   };
 
-  let candidates;
+  let filtered;
   if (prisma) {
     const swiped = await prisma.swipe.findMany({ where: { fromUserId: mine }, select: { toUserId: true } });
     const blocks = await prisma.block.findMany({
       where: { OR: [{ blockerId: mine }, { targetId: mine }] },
     });
     const excludeIds = [mine, ...swiped.map((s) => s.toUserId), ...blocks.map((b) => (b.blockerId === mine ? b.targetId : b.blockerId))];
-    candidates = await prisma.profile.findMany({
-      where: { userId: { notIn: excludeIds } },
+    filtered = await prisma.profile.findMany({
+      where: {
+        userId: { notIn: excludeIds },
+        stage: filters.stage || undefined,
+        lookingFor: filters.lookingFor ? { has: filters.lookingFor } : undefined,
+        industries: filters.industry ? { has: filters.industry } : undefined,
+        location: filters.location ? { contains: filters.location, mode: 'insensitive' } : undefined,
+      },
       include: { user: { select: { fullName: true, avatarUrl: true } } },
     });
   } else {
@@ -395,19 +438,17 @@ app.get('/discover', auth, async (req, res) => {
       if (b.blockerId === mine) blocked.add(b.targetId);
       if (b.targetId === mine) blocked.add(b.blockerId);
     }
-    candidates = mem.profiles
+    filtered = mem.profiles
       .filter((p) => p.userId !== mine && !swiped.has(p.userId) && !blocked.has(p.userId))
       .map((p) => {
         const u = mem.users.find((u) => u.id === p.userId);
         return { ...p, user: { fullName: u?.fullName, avatarUrl: u?.avatarUrl } };
       });
+    if (filters.stage) filtered = filtered.filter((p) => p.stage === filters.stage);
+    if (filters.lookingFor) filtered = filtered.filter((p) => (p.lookingFor || []).includes(filters.lookingFor));
+    if (filters.industry) filtered = filtered.filter((p) => (p.industries || []).includes(filters.industry));
+    if (filters.location) filtered = filtered.filter((p) => (p.location || '').toLowerCase().includes(filters.location));
   }
-
-  let filtered = candidates;
-  if (filters.stage) filtered = filtered.filter((p) => p.stage === filters.stage);
-  if (filters.lookingFor) filtered = filtered.filter((p) => (p.lookingFor || []).includes(filters.lookingFor));
-  if (filters.industry) filtered = filtered.filter((p) => (p.industries || []).includes(filters.industry));
-  if (filters.location) filtered = filtered.filter((p) => (p.location || '').toLowerCase().includes(filters.location));
 
   const ranked = diversify(rankProfiles(meProfile, filtered));
   const out = ranked.map(({ profile, score, reasons }) => ({
@@ -659,6 +700,10 @@ app.post('/messages/:conversationId', auth, async (req, res) => {
   if (!(await canAccessConversation(req.user.userId, conversationId))) {
     return res.status(403).json({ error: 'Forbidden' });
   }
+  const otherId = await otherUserInConversation(req.user.userId, conversationId);
+  if (otherId && (await isBlocked(req.user.userId, otherId))) {
+    return res.status(403).json({ error: 'Blocked' });
+  }
   let saved;
   if (prisma) {
     saved = await prisma.message.create({
@@ -854,7 +899,7 @@ wss.on('connection', (ws, req) => {
   const token = new URL(req.url, 'http://localhost').searchParams.get('token');
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    wsClients.set(payload.userId, ws);
+    addWsClient(payload.userId, ws);
 
     ws.on('message', async (raw) => {
       let data;
@@ -870,6 +915,9 @@ wss.on('connection', (ws, req) => {
         if (!(await canAccessConversation(userId, conversationId))) {
           return ws.send(JSON.stringify({ type: 'error', error: 'Forbidden conversation' }));
         }
+        if (await isBlocked(userId, toUserId)) {
+          return ws.send(JSON.stringify({ type: 'error', error: 'Blocked' }));
+        }
         let saved;
         if (prisma) {
           saved = await prisma.message.create({
@@ -883,16 +931,14 @@ wss.on('connection', (ws, req) => {
           mem.messages.push(saved);
         }
         ws.send(JSON.stringify({ type: 'message_ack', messageId: saved.id, status: 'DELIVERED' }));
-        const target = wsClients.get(toUserId);
-        if (target) target.send(JSON.stringify({ type: 'message', message: saved }));
-        else pushToUser(toUserId, { title: 'New message', body: body.slice(0, 80) });
+        const delivered = sendToUser(toUserId, { type: 'message', message: saved });
+        if (!delivered) pushToUser(toUserId, { title: 'New message', body: body.slice(0, 80) });
       }
 
       if (data.type === 'typing') {
         const { conversationId, toUserId } = data;
         if (!(await canAccessConversation(userId, conversationId))) return;
-        const target = wsClients.get(toUserId);
-        if (target) target.send(JSON.stringify({ type: 'typing', conversationId, fromUserId: userId }));
+        sendToUser(toUserId, { type: 'typing', conversationId, fromUserId: userId });
       }
 
       if (data.type === 'read_message') {
@@ -910,7 +956,7 @@ wss.on('connection', (ws, req) => {
       }
     });
 
-    ws.on('close', () => wsClients.delete(payload.userId));
+    ws.on('close', () => removeWsClient(payload.userId, ws));
   } catch {
     ws.close();
   }

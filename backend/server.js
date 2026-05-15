@@ -98,7 +98,12 @@ export function createServer(options = {}) {
             };
             res.writeHead(200, headers);
             if (req.method === 'HEAD') return res.end();
-            return fs.createReadStream(filePath).pipe(res);
+            const stream = fs.createReadStream(filePath);
+            stream.on('error', () => {
+              if (!res.headersSent) res.writeHead(500, baseHeaders);
+              try { res.end(); } catch {}
+            });
+            return stream.pipe(res);
           }
         }
       }

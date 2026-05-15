@@ -317,7 +317,7 @@ app.get('/me', auth, async (req, res) => {
 const PROFILE_FIELDS = [
   'headline', 'userType', 'lookingFor', 'bio', 'stage', 'industries', 'skills',
   'location', 'remoteOk', 'commitment', 'linkedinUrl', 'avatarUrl', 'photoUrl',
-  'videoIntroUrl', 'pastCompanies', 'hoursPerWeek', 'calLink', 'pitchDeckUrl',
+  'photos', 'videoIntroUrl', 'pastCompanies', 'hoursPerWeek', 'calLink', 'pitchDeckUrl',
 ];
 function sanitizeProfile(body) {
   const out = {};
@@ -326,6 +326,8 @@ function sanitizeProfile(body) {
   if (Array.isArray(out.industries)) out.industries = out.industries.slice(0, 6);
   if (Array.isArray(out.skills)) out.skills = out.skills.slice(0, 8);
   if (Array.isArray(out.pastCompanies)) out.pastCompanies = out.pastCompanies.slice(0, 6);
+  if (Array.isArray(out.photos)) out.photos = out.photos.filter(Boolean).slice(0, 5);
+  if (Array.isArray(out.photos) && out.photos.length && !out.photoUrl) out.photoUrl = out.photos[0];
   if (out.hoursPerWeek != null) out.hoursPerWeek = Math.max(0, Math.min(80, Number(out.hoursPerWeek) || 0));
   if (typeof out.bio === 'string') {
     const mod = moderateText(out.bio);
@@ -566,38 +568,77 @@ app.get('/likes/incoming', auth, async (req, res) => {
 app.get('/matches', auth, async (req, res) => {
   const userId = req.user.userId;
   if (prisma) {
-    const matches = await prisma.match.findMany({ where: { OR: [{ userAId: userId }, { userBId: userId }] } });
+    const matches = await prisma.match.findMany({
+      where: { OR: [{ userAId: userId }, { userBId: userId }] },
+      orderBy: { createdAt: 'desc' },
+    });
     const otherIds = matches.map((m) => (m.userAId === userId ? m.userBId : m.userAId));
     const others = await prisma.user.findMany({ where: { id: { in: otherIds } }, include: { profile: true } });
     const convs = await prisma.conversation.findMany({ where: { matchId: { in: matches.map((m) => m.id) } } });
-    return res.json(
-      matches.map((m) => {
-        const otherId = m.userAId === userId ? m.userBId : m.userAId;
-        const other = others.find((u) => u.id === otherId);
-        return {
-          ...m,
-          other: other
-            ? { id: other.id, fullName: other.fullName, avatarUrl: other.profile?.photoUrl || other.avatarUrl, profile: other.profile }
-            : null,
-          conversation: convs.find((c) => c.matchId === m.id) || null,
-        };
-      }),
-    );
+    const out = [];
+    for (const m of matches) {
+      const otherId = m.userAId === userId ? m.userBId : m.userAId;
+      const other = others.find((u) => u.id === otherId);
+      const conversation = convs.find((c) => c.matchId === m.id) || null;
+      let lastMessage = null;
+      let unreadCount = 0;
+      if (conversation) {
+        lastMessage = await prisma.message.findFirst({
+          where: { conversationId: conversation.id }, orderBy: { createdAt: 'desc' },
+        });
+        unreadCount = await prisma.message.count({
+          where: { conversationId: conversation.id, senderId: { not: userId }, status: { not: 'READ' } },
+        });
+      }
+      out.push({
+        ...m,
+        other: other
+          ? { id: other.id, fullName: other.fullName, avatarUrl: other.profile?.photoUrl || other.avatarUrl, profile: other.profile }
+          : null,
+        conversation, lastMessage, unreadCount,
+      });
+    }
+    return res.json(out);
   }
-  const matches = mem.matches.filter((m) => m.userAId === userId || m.userBId === userId);
+  const matches = mem.matches
+    .filter((m) => m.userAId === userId || m.userBId === userId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   res.json(
     matches.map((m) => {
       const otherId = m.userAId === userId ? m.userBId : m.userAId;
       const user = mem.users.find((u) => u.id === otherId);
       const profile = mem.profiles.find((p) => p.userId === otherId);
       const conversation = mem.conversations.find((c) => c.matchId === m.id);
+      const msgs = conversation ? mem.messages.filter((x) => x.conversationId === conversation.id) : [];
+      const lastMessage = msgs.length ? msgs[msgs.length - 1] : null;
+      const unreadCount = msgs.filter((x) => x.senderId !== userId && x.status !== 'READ').length;
       return {
         ...m,
         other: user ? { id: user.id, fullName: user.fullName, avatarUrl: profile?.photoUrl || user.avatarUrl, profile } : null,
         conversation,
+        lastMessage,
+        unreadCount,
       };
     }),
   );
+});
+
+app.post('/conversations/:conversationId/read', auth, async (req, res) => {
+  const { conversationId } = req.params;
+  if (!(await canAccessConversation(req.user.userId, conversationId))) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (prisma) {
+    await prisma.message.updateMany({
+      where: { conversationId, senderId: { not: req.user.userId }, status: { not: 'READ' } },
+      data: { status: 'READ' },
+    });
+  } else {
+    mem.messages.forEach((m) => {
+      if (m.conversationId === conversationId && m.senderId !== req.user.userId) m.status = 'READ';
+    });
+  }
+  res.json({ ok: true });
 });
 
 app.get('/messages/:conversationId', auth, async (req, res) => {

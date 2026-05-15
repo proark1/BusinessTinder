@@ -752,32 +752,45 @@ app.get('/matches', auth, async (req, res) => {
       orderBy: { createdAt: 'desc' },
     });
     const otherIds = matches.map((m) => (m.userAId === userId ? m.userBId : m.userAId));
-    const others = await prisma.user.findMany({ where: { id: { in: otherIds } }, include: { profile: true } });
     const convs = await prisma.conversation.findMany({ where: { matchId: { in: matches.map((m) => m.id) } } });
-    const out = [];
-    for (const m of matches) {
-      const otherId = m.userAId === userId ? m.userBId : m.userAId;
-      const other = others.find((u) => u.id === otherId);
-      const conversation = convs.find((c) => c.matchId === m.id) || null;
-      let lastMessage = null;
-      let unreadCount = 0;
-      if (conversation) {
-        lastMessage = await prisma.message.findFirst({
-          where: { conversationId: conversation.id }, orderBy: { createdAt: 'desc' },
-        });
-        unreadCount = await prisma.message.count({
-          where: { conversationId: conversation.id, senderId: { not: userId }, status: { not: 'READ' } },
-        });
-      }
-      out.push({
-        ...m,
-        other: other
-          ? { id: other.id, fullName: other.fullName, avatarUrl: other.profile?.photoUrl || other.avatarUrl, profile: other.profile }
-          : null,
-        conversation, lastMessage, unreadCount,
-      });
-    }
-    return res.json(out);
+    const convIds = convs.map((c) => c.id);
+    // Single round-trip for both last-message and unread counts.
+    const [others, lastMessages, unreadGroups] = await Promise.all([
+      prisma.user.findMany({ where: { id: { in: otherIds } }, include: { profile: true } }),
+      convIds.length
+        ? prisma.$queryRaw`
+            SELECT DISTINCT ON ("conversationId") *
+            FROM "Message"
+            WHERE "conversationId" = ANY(${convIds}::text[])
+            ORDER BY "conversationId", "createdAt" DESC
+          `
+        : Promise.resolve([]),
+      convIds.length
+        ? prisma.message.groupBy({
+            by: ['conversationId'],
+            where: { conversationId: { in: convIds }, senderId: { not: userId }, status: { not: 'READ' } },
+            _count: { _all: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const lastByConv = new Map(lastMessages.map((m) => [m.conversationId, m]));
+    const unreadByConv = new Map(unreadGroups.map((g) => [g.conversationId, g._count._all]));
+    return res.json(
+      matches.map((m) => {
+        const otherId = m.userAId === userId ? m.userBId : m.userAId;
+        const other = others.find((u) => u.id === otherId);
+        const conversation = convs.find((c) => c.matchId === m.id) || null;
+        return {
+          ...m,
+          other: other
+            ? { id: other.id, fullName: other.fullName, avatarUrl: other.profile?.photoUrl || other.avatarUrl, profile: other.profile }
+            : null,
+          conversation,
+          lastMessage: conversation ? lastByConv.get(conversation.id) || null : null,
+          unreadCount: conversation ? (unreadByConv.get(conversation.id) || 0) : 0,
+        };
+      }),
+    );
   }
   const matches = mem.matches
     .filter((m) => m.userAId === userId || m.userBId === userId)
@@ -1002,18 +1015,34 @@ app.get('/icebreakers', auth, async (req, res) => {
 app.delete('/me', auth, async (req, res) => {
   const me = req.user.userId;
   if (prisma) {
-    // Cascading FKs handle Profile/Swipe/Message/PushSubscription.
+    // Find this user's matches first so we can drop the linked conversations
+    // (there is no FK cascade from Match → Conversation in the schema).
+    const myMatches = await prisma.match.findMany({
+      where: { OR: [{ userAId: me }, { userBId: me }] }, select: { id: true },
+    });
+    const matchIds = myMatches.map((m) => m.id);
+    if (matchIds.length) {
+      // Cascade from Conversation → Message via the existing FK relation.
+      await prisma.conversation.deleteMany({ where: { matchId: { in: matchIds } } });
+    }
     await prisma.savedProfile.deleteMany({ where: { OR: [{ userId: me }, { profileUserId: me }] } });
     await prisma.report.deleteMany({ where: { OR: [{ reporterId: me }, { targetId: me }] } });
     await prisma.block.deleteMany({ where: { OR: [{ blockerId: me }, { targetId: me }] } });
-    await prisma.match.deleteMany({ where: { OR: [{ userAId: me }, { userBId: me }] } });
+    await prisma.match.deleteMany({ where: { id: { in: matchIds } } });
     await prisma.user.delete({ where: { id: me } });
   } else {
+    const myMatchIds = new Set(
+      mem.matches.filter((m) => m.userAId === me || m.userBId === me).map((m) => m.id),
+    );
+    const myConvIds = new Set(
+      mem.conversations.filter((c) => myMatchIds.has(c.matchId)).map((c) => c.id),
+    );
     mem.users = mem.users.filter((u) => u.id !== me);
     mem.profiles = mem.profiles.filter((p) => p.userId !== me);
     mem.swipes = mem.swipes.filter((s) => s.fromUserId !== me && s.toUserId !== me);
     mem.matches = mem.matches.filter((m) => m.userAId !== me && m.userBId !== me);
-    mem.messages = mem.messages.filter((m) => m.senderId !== me);
+    mem.conversations = mem.conversations.filter((c) => !myConvIds.has(c.id));
+    mem.messages = mem.messages.filter((m) => m.senderId !== me && !myConvIds.has(m.conversationId));
     mem.saved = mem.saved.filter((s) => s.userId !== me && s.profileUserId !== me);
     mem.reports = mem.reports.filter((r) => r.reporterId !== me && r.targetId !== me);
     mem.blocks = mem.blocks.filter((b) => b.blockerId !== me && b.targetId !== me);

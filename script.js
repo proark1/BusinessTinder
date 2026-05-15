@@ -71,6 +71,13 @@ function showToast(message) {
 }
 function haptic(ms = 12) { if (navigator.vibrate) try { navigator.vibrate(ms); } catch {} }
 
+// HTML escape for any user-provided string we inject via innerHTML.
+function esc(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]),
+  );
+}
+
 // ---------- focus trap ----------
 const focusTrappers = new Map(); // modalEl -> handler
 function trapFocus(modal) {
@@ -81,7 +88,7 @@ function trapFocus(modal) {
   const first = focusables()[0];
   first?.focus();
   const handler = (e) => {
-    if (e.key === "Escape") modal.hidden = true;
+    if (e.key === "Escape") { closeModal(modal); return; }
     if (e.key !== "Tab") return;
     const list = focusables();
     if (!list.length) return;
@@ -251,11 +258,17 @@ function renderGrid(target, profiles) {
     const card = document.createElement("article");
     card.className = "grid-card glass";
     card.innerHTML = `
-      <img src="${avatarFor(p)}" alt="" />
-      <h3>${p.fullName || ""}</h3>
-      <p class="role">${p.headline || ""}</p>
-      <p class="meta">${describeUserType(p.userType)} · ${p.location || ""}</p>
-      <p class="score">${typeof p.matchScore === "number" ? `${p.matchScore}% match` : ""}</p>`;
+      <img alt="" />
+      <h3></h3>
+      <p class="role"></p>
+      <p class="meta"></p>
+      <p class="score"></p>`;
+    card.querySelector("img").src = avatarFor(p);
+    card.querySelector("h3").textContent = p.fullName || "";
+    card.querySelector(".role").textContent = p.headline || "";
+    card.querySelector(".meta").textContent = `${describeUserType(p.userType)} · ${p.location || ""}`;
+    card.querySelector(".score").textContent =
+      typeof p.matchScore === "number" ? `${p.matchScore}% match` : "";
     card.addEventListener("click", () => openDetail(p));
     target.appendChild(card);
   });
@@ -274,21 +287,27 @@ function switchView(mode) {
 // ---------- detail modal ----------
 function openDetail(p) {
   const photos = p.photos?.length ? p.photos : [avatarFor(p)];
-  qs("detailGallery").innerHTML = photos.map((src) => `<img src="${src}" alt="" />`).join("");
+  // photos already validated as data:image/(png|jpeg|webp);base64 or https; still escape URL chars defensively.
+  qs("detailGallery").innerHTML = photos.map((src) => `<img src="${esc(src)}" alt="" />`).join("");
+  const tagList = (arr) => (arr || []).map((x) => `<li>${esc(String(x).replace("_", " "))}</li>`).join("");
+  const safeLink = (url) => {
+    const s = String(url || "");
+    return /^https?:\/\//i.test(s) ? esc(s) : "#";
+  };
   qs("detailBody").innerHTML = `
-    <h2>${p.fullName || ""}</h2>
-    <p class="role">${p.headline || ""}</p>
-    <p class="meta">${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote OK" : ""}</p>
-    ${typeof p.matchScore === "number" ? `<p class="reasons-row">${p.matchScore}% match${p.matchReasons?.length ? " · " + p.matchReasons.join(" · ") : ""}</p>` : ""}
-    <p>${p.bio || ""}</p>
-    ${p.lookingFor?.length ? `<div class="section"><h3>Looking for</h3><ul class="tags">${p.lookingFor.map((x) => `<li>${x.replace("_", " ")}</li>`).join("")}</ul></div>` : ""}
-    ${p.industries?.length ? `<div class="section"><h3>Industries</h3><ul class="tags">${p.industries.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
-    ${p.skills?.length ? `<div class="section"><h3>What they bring</h3><ul class="tags">${p.skills.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
-    ${p.pastCompanies?.length ? `<div class="section"><h3>Past companies</h3><p>${p.pastCompanies.join(" · ")}</p></div>` : ""}
-    ${p.commitment ? `<div class="section"><h3>Commitment</h3><p>${p.commitment.replace("_", " ")}${p.hoursPerWeek ? ` · ${p.hoursPerWeek}h/wk` : ""}</p></div>` : ""}
-    ${p.linkedinUrl ? `<div class="section"><h3>LinkedIn</h3><p><a href="${p.linkedinUrl}" target="_blank" rel="noopener">${p.linkedinUrl}</a></p></div>` : ""}
-    ${p.pitchDeckUrl ? `<div class="section"><h3>Pitch deck</h3><p><a href="${p.pitchDeckUrl}" target="_blank" rel="noopener">View deck</a></p></div>` : ""}
-    ${p.calLink ? `<div class="section"><h3>Schedule a call</h3><p><a href="${p.calLink}" target="_blank" rel="noopener">${p.calLink}</a></p></div>` : ""}
+    <h2>${esc(p.fullName || "")}</h2>
+    <p class="role">${esc(p.headline || "")}</p>
+    <p class="meta">${esc(describeUserType(p.userType))} · ${esc(describeStage(p.stage))} · ${esc(p.location || "")}${p.remoteOk ? " · Remote OK" : ""}</p>
+    ${typeof p.matchScore === "number" ? `<p class="reasons-row">${p.matchScore}% match${p.matchReasons?.length ? " · " + esc(p.matchReasons.join(" · ")) : ""}</p>` : ""}
+    <p>${esc(p.bio || "")}</p>
+    ${p.lookingFor?.length ? `<div class="section"><h3>Looking for</h3><ul class="tags">${tagList(p.lookingFor)}</ul></div>` : ""}
+    ${p.industries?.length ? `<div class="section"><h3>Industries</h3><ul class="tags">${tagList(p.industries)}</ul></div>` : ""}
+    ${p.skills?.length ? `<div class="section"><h3>What they bring</h3><ul class="tags">${tagList(p.skills)}</ul></div>` : ""}
+    ${p.pastCompanies?.length ? `<div class="section"><h3>Past companies</h3><p>${esc(p.pastCompanies.join(" · "))}</p></div>` : ""}
+    ${p.commitment ? `<div class="section"><h3>Commitment</h3><p>${esc(p.commitment.replace("_", " "))}${p.hoursPerWeek ? ` · ${Number(p.hoursPerWeek)}h/wk` : ""}</p></div>` : ""}
+    ${p.linkedinUrl ? `<div class="section"><h3>LinkedIn</h3><p><a href="${safeLink(p.linkedinUrl)}" target="_blank" rel="noopener">${esc(p.linkedinUrl)}</a></p></div>` : ""}
+    ${p.pitchDeckUrl ? `<div class="section"><h3>Pitch deck</h3><p><a href="${safeLink(p.pitchDeckUrl)}" target="_blank" rel="noopener">View deck</a></p></div>` : ""}
+    ${p.calLink ? `<div class="section"><h3>Schedule a call</h3><p><a href="${safeLink(p.calLink)}" target="_blank" rel="noopener">${esc(p.calLink)}</a></p></div>` : ""}
     <div class="detail-actions">
       <button class="pass-btn" id="detailPassBtn" type="button">Pass</button>
       <button class="ghost" id="detailSuperBtn" type="button" style="flex:0 0 auto;">★ Super-like</button>
@@ -353,7 +372,10 @@ async function loadLikedYou() {
         (data.profiles || []).forEach((p) => {
           const div = document.createElement("div");
           div.className = "liked-row";
-          div.innerHTML = `<img src="${avatarFor(p)}" alt="" /><div><strong>${p.fullName}</strong><br/><small style="color:var(--text-2)">${p.headline || ""}</small></div>`;
+          div.innerHTML = `<img alt="" /><div><strong></strong><br/><small style="color:var(--text-2)"></small></div>`;
+          div.querySelector("img").src = avatarFor(p);
+          div.querySelector("strong").textContent = p.fullName || "";
+          div.querySelector("small").textContent = p.headline || "";
           div.addEventListener("click", () => openDetail(p));
           likedYouBox.appendChild(div);
         });
@@ -375,15 +397,34 @@ function renderMatches() {
     li.className = "match-row";
     li.dataset.matchId = m.id;
     li.innerHTML = `
-      <img src="${avatarFor({ photos: other.profile?.photos, photoUrl: other.profile?.photoUrl, avatarUrl: other.avatarUrl, fullName: other.fullName })}" alt="" />
+      <img alt="" />
       <div class="match-meta">
-        <div class="match-name">${other.fullName}</div>
-        <div class="match-preview">${m.lastMessage?.body ? (m.lastMessage.senderId === state.user.id ? "You: " : "") + m.lastMessage.body : (other.profile?.headline || "Say hi 👋")}</div>
+        <div class="match-name"></div>
+        <div class="match-preview"></div>
       </div>
-      <div class="match-side">
-        ${m.unreadCount > 0 ? `<span class="unread-pill">${m.unreadCount}</span>` : ""}
-        ${m.lastMessage ? `<span class="match-ts">${timeAgo(m.lastMessage.createdAt)}</span>` : ""}
-      </div>`;
+      <div class="match-side"></div>`;
+    li.querySelector("img").src = avatarFor({
+      photos: other.profile?.photos, photoUrl: other.profile?.photoUrl,
+      avatarUrl: other.avatarUrl, fullName: other.fullName,
+    });
+    li.querySelector(".match-name").textContent = other.fullName || "";
+    const preview = m.lastMessage?.body
+      ? (m.lastMessage.senderId === state.user.id ? "You: " : "") + m.lastMessage.body
+      : (other.profile?.headline || "Say hi 👋");
+    li.querySelector(".match-preview").textContent = preview;
+    const side = li.querySelector(".match-side");
+    if (m.unreadCount > 0) {
+      const pill = document.createElement("span");
+      pill.className = "unread-pill";
+      pill.textContent = String(m.unreadCount);
+      side.appendChild(pill);
+    }
+    if (m.lastMessage) {
+      const ts = document.createElement("span");
+      ts.className = "match-ts";
+      ts.textContent = timeAgo(m.lastMessage.createdAt);
+      side.appendChild(ts);
+    }
     li.addEventListener("click", () => openChat(m.id));
     matchesList.appendChild(li);
   });
@@ -400,14 +441,17 @@ function renderSaved() {
     const li = document.createElement("li");
     li.className = "match-row";
     li.innerHTML = `
-      <img src="${avatarFor(p)}" alt="" />
+      <img alt="" />
       <div class="match-meta">
-        <div class="match-name">${p.fullName}</div>
-        <div class="match-preview">${p.headline || ""}</div>
+        <div class="match-name"></div>
+        <div class="match-preview"></div>
       </div>
-      <div class="match-side">
-        <button class="ghost" data-unsave-target="${p.userId}">Remove</button>
-      </div>`;
+      <div class="match-side"><button class="ghost">Remove</button></div>`;
+    li.querySelector("img").src = avatarFor(p);
+    li.querySelector(".match-name").textContent = p.fullName || "";
+    li.querySelector(".match-preview").textContent = p.headline || "";
+    const removeBtn = li.querySelector("button");
+    removeBtn.dataset.unsaveTarget = p.userId;
     li.addEventListener("click", (ev) => {
       if (ev.target?.dataset?.unsaveTarget) return;
       openDetail(p);
@@ -600,14 +644,30 @@ function renderPreviewCard() {
   const p = gatherProfilePayload();
   p.fullName = state.user?.fullName || "";
   const photo = p.photos?.[0] || avatarFor(p);
-  qs("previewCard").innerHTML = `
-    <img src="${photo}" alt="" />
-    <h3>${p.fullName}</h3>
-    <p class="role">${p.headline || ""}</p>
-    <p class="meta">${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote" : ""}</p>
-    <p class="bio">${p.bio || ""}</p>
-    <ul class="tags">${(p.industries || []).slice(0, 4).map((t) => `<li>${t}</li>`).join("")}</ul>
-    <p class="meta" style="margin-top:10px;">${p.lookingFor?.length ? `Looking for: ${p.lookingFor.join(", ")}` : ""}</p>`;
+  const card = qs("previewCard");
+  card.innerHTML = `
+    <img alt="" />
+    <h3></h3>
+    <p class="role"></p>
+    <p class="meta"></p>
+    <p class="bio"></p>
+    <ul class="tags"></ul>
+    <p class="meta lf" style="margin-top:10px;"></p>`;
+  card.querySelector("img").src = photo;
+  card.querySelector("h3").textContent = p.fullName;
+  card.querySelector(".role").textContent = p.headline || "";
+  card.querySelector(".meta").textContent =
+    `${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote" : ""}`;
+  card.querySelector(".bio").textContent = p.bio || "";
+  const tags = card.querySelector(".tags");
+  (p.industries || []).slice(0, 4).forEach((t) => {
+    const li = document.createElement("li");
+    li.textContent = t;
+    tags.appendChild(li);
+  });
+  card.querySelector(".lf").textContent = p.lookingFor?.length
+    ? `Looking for: ${p.lookingFor.join(", ")}`
+    : "";
 }
 
 qs("wizardNext").addEventListener("click", () => {
@@ -895,7 +955,13 @@ function appendMessage(m) {
   const box = qs("messages");
   const div = document.createElement("div");
   div.className = `msg ${m.senderId === state.user.id ? "me" : "them"}`;
-  div.innerHTML = `${m.body}${m.createdAt ? `<span class="ts">${timeAgo(m.createdAt)}</span>` : ""}`;
+  div.textContent = m.body || "";
+  if (m.createdAt) {
+    const ts = document.createElement("span");
+    ts.className = "ts";
+    ts.textContent = timeAgo(m.createdAt);
+    div.appendChild(ts);
+  }
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
@@ -1112,10 +1178,13 @@ qs("manageBlocksBtn").addEventListener("click", async () => {
         li.className = "match-row";
         li.innerHTML = `
           <div class="match-meta">
-            <div class="match-name">${b.fullName || "Unknown"}</div>
-            <div class="match-preview">${b.headline || ""}</div>
+            <div class="match-name"></div>
+            <div class="match-preview"></div>
           </div>
-          <button class="ghost" data-unblock="${b.targetId}">Unblock</button>`;
+          <button class="ghost">Unblock</button>`;
+        li.querySelector(".match-name").textContent = b.fullName || "Unknown";
+        li.querySelector(".match-preview").textContent = b.headline || "";
+        li.querySelector("button").dataset.unblock = b.targetId;
         list.appendChild(li);
       });
       list.querySelectorAll("button[data-unblock]").forEach((b) =>

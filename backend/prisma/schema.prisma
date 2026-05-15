@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  profile      Profile?
+  sentSwipes   Swipe[]  @relation("sent")
+  recvSwipes   Swipe[]  @relation("recv")
+  messages     Message[]
+}
+
+model Profile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  role      String
+  bio       String
+  interests String[]
+  goals     String[]
+  location  String
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Swipe {
+  id         String   @id @default(cuid())
+  fromUserId String
+  toUserId   String
+  direction  SwipeDirection
+  createdAt  DateTime @default(now())
+  fromUser   User     @relation("sent", fields: [fromUserId], references: [id])
+  toUser     User     @relation("recv", fields: [toUserId], references: [id])
+  @@unique([fromUserId, toUserId])
+}
+
+model Match {
+  id        String   @id @default(cuid())
+  userAId   String
+  userBId   String
+  createdAt DateTime @default(now())
+  @@unique([userAId, userBId])
+}
+
+model Conversation {
+  id        String    @id @default(cuid())
+  matchId   String    @unique
+  createdAt DateTime  @default(now())
+  messages  Message[]
+}
+
+model Message {
+  id             String        @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String
+  status         MessageStatus @default(SENT)
+  createdAt      DateTime      @default(now())
+  conversation   Conversation  @relation(fields: [conversationId], references: [id])
+  sender         User          @relation(fields: [senderId], references: [id])
+}
+
+enum SwipeDirection {
+  LEFT
+  RIGHT
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}

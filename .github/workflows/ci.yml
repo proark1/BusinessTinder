@@ -16,5 +16,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install backend deps
+        run: npm install --no-audit --no-fund
+        working-directory: backend
+
       - name: Run tests
         run: npm test

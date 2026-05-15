@@ -26,9 +26,12 @@ const state = {
   view: "cards",
   config: { googleClientId: null, vapidPublicKey: null, freeDailySwipes: 30 },
   ws: null,
+  wsReconnectAttempts: 0,
   installPrompt: null,
   wizardStep: 1,
   pendingPhotos: [],
+  pendingVerifyUrl: null,
+  pendingResetToken: null,
 };
 
 // ---------- API ----------
@@ -67,6 +70,48 @@ function showToast(message) {
   setTimeout(() => el.classList.remove("show"), 1400);
 }
 function haptic(ms = 12) { if (navigator.vibrate) try { navigator.vibrate(ms); } catch {} }
+
+// HTML escape for any user-provided string we inject via innerHTML.
+function esc(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]),
+  );
+}
+
+// ---------- focus trap ----------
+const focusTrappers = new Map(); // modalEl -> handler
+function trapFocus(modal) {
+  const focusables = () =>
+    [...modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => !el.disabled && !el.hidden && el.offsetParent !== null);
+  const prev = document.activeElement;
+  const first = focusables()[0];
+  first?.focus();
+  const handler = (e) => {
+    if (e.key === "Escape") { closeModal(modal); return; }
+    if (e.key !== "Tab") return;
+    const list = focusables();
+    if (!list.length) return;
+    const i = list.indexOf(document.activeElement);
+    if (e.shiftKey && (i <= 0 || i === -1)) { e.preventDefault(); list[list.length - 1].focus(); }
+    else if (!e.shiftKey && i === list.length - 1) { e.preventDefault(); list[0].focus(); }
+  };
+  modal.addEventListener("keydown", handler);
+  focusTrappers.set(modal, { handler, prev });
+}
+function releaseFocus(modal) {
+  const t = focusTrappers.get(modal);
+  if (!t) return;
+  modal.removeEventListener("keydown", t.handler);
+  try { t.prev?.focus?.(); } catch {}
+  focusTrappers.delete(modal);
+}
+function openModal(modal) { modal.hidden = false; trapFocus(modal); }
+function closeModal(modal) { modal.hidden = true; releaseFocus(modal); }
+// Auto-wire close on backdrop click + Esc
+function wireModal(modal) {
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(modal); });
+}
 function describeUserType(t) {
   return ({ founder: "Founder", cofounder_search: "Looking for co-founder", operator: "Operator", investor: "Investor", advisor: "Advisor" })[t] || t || "";
 }
@@ -96,10 +141,33 @@ function readChipSet(set) {
 function enforceChipMax() {
   document.querySelectorAll(".chip-set").forEach((set) => {
     const max = Number(set.dataset.max || 99);
-    set.addEventListener("change", () => {
+    let msg = set.querySelector(".chip-limit-msg");
+    if (!msg) {
+      msg = document.createElement("p");
+      msg.className = "chip-limit-msg";
+      msg.hidden = true;
+      set.appendChild(msg);
+    }
+    const update = () => {
       const checked = [...set.querySelectorAll('input[type="checkbox"]:checked')];
-      if (checked.length > max) checked[checked.length - 1].checked = false;
-    });
+      if (checked.length > max) {
+        const last = checked[checked.length - 1];
+        last.checked = false;
+        msg.textContent = `You can pick up to ${max}. Uncheck one to add another.`;
+        msg.hidden = false;
+        clearTimeout(set._limitTimer);
+        set._limitTimer = setTimeout(() => (msg.hidden = true), 2200);
+      } else {
+        msg.hidden = true;
+        const left = max - checked.length;
+        if (left === 0) {
+          msg.textContent = `${max}/${max} selected`;
+          msg.hidden = false;
+        }
+      }
+    };
+    set.addEventListener("change", update);
+    update();
   });
 }
 
@@ -144,6 +212,20 @@ function renderCard(p, index, total) {
     pill.textContent = `${p.matchScore}% match`;
     pill.hidden = false;
   }
+  if (p.superLikedYou) {
+    node.classList.add("superlike");
+    const sl = document.createElement("div");
+    sl.className = "superlike-badge";
+    sl.textContent = "★ SUPER-LIKED YOU";
+    node.appendChild(sl);
+  }
+  if (p.verified) {
+    const h2 = node.querySelector("h2");
+    const span = document.createElement("span");
+    span.className = "verified-pill";
+    span.textContent = "✓ verified";
+    h2.appendChild(span);
+  }
   return node;
 }
 
@@ -176,11 +258,17 @@ function renderGrid(target, profiles) {
     const card = document.createElement("article");
     card.className = "grid-card glass";
     card.innerHTML = `
-      <img src="${avatarFor(p)}" alt="" />
-      <h3>${p.fullName || ""}</h3>
-      <p class="role">${p.headline || ""}</p>
-      <p class="meta">${describeUserType(p.userType)} · ${p.location || ""}</p>
-      <p class="score">${typeof p.matchScore === "number" ? `${p.matchScore}% match` : ""}</p>`;
+      <img alt="" />
+      <h3></h3>
+      <p class="role"></p>
+      <p class="meta"></p>
+      <p class="score"></p>`;
+    card.querySelector("img").src = avatarFor(p);
+    card.querySelector("h3").textContent = p.fullName || "";
+    card.querySelector(".role").textContent = p.headline || "";
+    card.querySelector(".meta").textContent = `${describeUserType(p.userType)} · ${p.location || ""}`;
+    card.querySelector(".score").textContent =
+      typeof p.matchScore === "number" ? `${p.matchScore}% match` : "";
     card.addEventListener("click", () => openDetail(p));
     target.appendChild(card);
   });
@@ -199,30 +287,38 @@ function switchView(mode) {
 // ---------- detail modal ----------
 function openDetail(p) {
   const photos = p.photos?.length ? p.photos : [avatarFor(p)];
-  qs("detailGallery").innerHTML = photos.map((src) => `<img src="${src}" alt="" />`).join("");
+  // photos already validated as data:image/(png|jpeg|webp);base64 or https; still escape URL chars defensively.
+  qs("detailGallery").innerHTML = photos.map((src) => `<img src="${esc(src)}" alt="" />`).join("");
+  const tagList = (arr) => (arr || []).map((x) => `<li>${esc(String(x).replace("_", " "))}</li>`).join("");
+  const safeLink = (url) => {
+    const s = String(url || "");
+    return /^https?:\/\//i.test(s) ? esc(s) : "#";
+  };
   qs("detailBody").innerHTML = `
-    <h2>${p.fullName || ""}</h2>
-    <p class="role">${p.headline || ""}</p>
-    <p class="meta">${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote OK" : ""}</p>
-    ${typeof p.matchScore === "number" ? `<p class="reasons-row">${p.matchScore}% match${p.matchReasons?.length ? " · " + p.matchReasons.join(" · ") : ""}</p>` : ""}
-    <p>${p.bio || ""}</p>
-    ${p.lookingFor?.length ? `<div class="section"><h3>Looking for</h3><ul class="tags">${p.lookingFor.map((x) => `<li>${x.replace("_", " ")}</li>`).join("")}</ul></div>` : ""}
-    ${p.industries?.length ? `<div class="section"><h3>Industries</h3><ul class="tags">${p.industries.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
-    ${p.skills?.length ? `<div class="section"><h3>What they bring</h3><ul class="tags">${p.skills.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
-    ${p.pastCompanies?.length ? `<div class="section"><h3>Past companies</h3><p>${p.pastCompanies.join(" · ")}</p></div>` : ""}
-    ${p.commitment ? `<div class="section"><h3>Commitment</h3><p>${p.commitment.replace("_", " ")}${p.hoursPerWeek ? ` · ${p.hoursPerWeek}h/wk` : ""}</p></div>` : ""}
-    ${p.linkedinUrl ? `<div class="section"><h3>LinkedIn</h3><p><a href="${p.linkedinUrl}" target="_blank" rel="noopener">${p.linkedinUrl}</a></p></div>` : ""}
-    ${p.pitchDeckUrl ? `<div class="section"><h3>Pitch deck</h3><p><a href="${p.pitchDeckUrl}" target="_blank" rel="noopener">View deck</a></p></div>` : ""}
-    ${p.calLink ? `<div class="section"><h3>Schedule a call</h3><p><a href="${p.calLink}" target="_blank" rel="noopener">${p.calLink}</a></p></div>` : ""}
+    <h2>${esc(p.fullName || "")}</h2>
+    <p class="role">${esc(p.headline || "")}</p>
+    <p class="meta">${esc(describeUserType(p.userType))} · ${esc(describeStage(p.stage))} · ${esc(p.location || "")}${p.remoteOk ? " · Remote OK" : ""}</p>
+    ${typeof p.matchScore === "number" ? `<p class="reasons-row">${p.matchScore}% match${p.matchReasons?.length ? " · " + esc(p.matchReasons.join(" · ")) : ""}</p>` : ""}
+    <p>${esc(p.bio || "")}</p>
+    ${p.lookingFor?.length ? `<div class="section"><h3>Looking for</h3><ul class="tags">${tagList(p.lookingFor)}</ul></div>` : ""}
+    ${p.industries?.length ? `<div class="section"><h3>Industries</h3><ul class="tags">${tagList(p.industries)}</ul></div>` : ""}
+    ${p.skills?.length ? `<div class="section"><h3>What they bring</h3><ul class="tags">${tagList(p.skills)}</ul></div>` : ""}
+    ${p.pastCompanies?.length ? `<div class="section"><h3>Past companies</h3><p>${esc(p.pastCompanies.join(" · "))}</p></div>` : ""}
+    ${p.commitment ? `<div class="section"><h3>Commitment</h3><p>${esc(p.commitment.replace("_", " "))}${p.hoursPerWeek ? ` · ${Number(p.hoursPerWeek)}h/wk` : ""}</p></div>` : ""}
+    ${p.linkedinUrl ? `<div class="section"><h3>LinkedIn</h3><p><a href="${safeLink(p.linkedinUrl)}" target="_blank" rel="noopener">${esc(p.linkedinUrl)}</a></p></div>` : ""}
+    ${p.pitchDeckUrl ? `<div class="section"><h3>Pitch deck</h3><p><a href="${safeLink(p.pitchDeckUrl)}" target="_blank" rel="noopener">View deck</a></p></div>` : ""}
+    ${p.calLink ? `<div class="section"><h3>Schedule a call</h3><p><a href="${safeLink(p.calLink)}" target="_blank" rel="noopener">${esc(p.calLink)}</a></p></div>` : ""}
     <div class="detail-actions">
       <button class="pass-btn" id="detailPassBtn" type="button">Pass</button>
+      <button class="ghost" id="detailSuperBtn" type="button" style="flex:0 0 auto;">★ Super-like</button>
       <button class="like-btn" id="detailLikeBtn" type="button">Like</button>
     </div>`;
-  qs("detailModal").hidden = false;
-  qs("detailPassBtn").onclick = () => { qs("detailModal").hidden = true; onSwipe("left", p); };
-  qs("detailLikeBtn").onclick = () => { qs("detailModal").hidden = true; onSwipe("right", p); };
+  openModal(qs("detailModal"));
+  qs("detailPassBtn").onclick = () => { closeModal(qs("detailModal")); onSwipe("left", p); };
+  qs("detailLikeBtn").onclick = () => { closeModal(qs("detailModal")); onSwipe("right", p); };
+  qs("detailSuperBtn").onclick = () => { closeModal(qs("detailModal")); onSwipe("super", p); };
 }
-qs("detailCloseBtn").addEventListener("click", () => (qs("detailModal").hidden = true));
+qs("detailCloseBtn").addEventListener("click", () => closeModal(qs("detailModal")));
 
 // ---------- discover / matches / saved ----------
 async function loadDiscover() {
@@ -267,7 +363,7 @@ async function loadLikedYou() {
         <p>${data.count === 1 ? "person" : "people"} liked your profile</p>
         <button class="primary" id="seeLikesBtn" type="button">Upgrade to Pro to see who</button>
       </div>`;
-      qs("seeLikesBtn")?.addEventListener("click", () => (qs("proModal").hidden = false));
+      qs("seeLikesBtn")?.addEventListener("click", () => openModal(qs("proModal")));
     } else {
       likedYouBox.innerHTML = "";
       if (!data.profiles?.length) {
@@ -276,7 +372,10 @@ async function loadLikedYou() {
         (data.profiles || []).forEach((p) => {
           const div = document.createElement("div");
           div.className = "liked-row";
-          div.innerHTML = `<img src="${avatarFor(p)}" alt="" /><div><strong>${p.fullName}</strong><br/><small style="color:var(--text-2)">${p.headline || ""}</small></div>`;
+          div.innerHTML = `<img alt="" /><div><strong></strong><br/><small style="color:var(--text-2)"></small></div>`;
+          div.querySelector("img").src = avatarFor(p);
+          div.querySelector("strong").textContent = p.fullName || "";
+          div.querySelector("small").textContent = p.headline || "";
           div.addEventListener("click", () => openDetail(p));
           likedYouBox.appendChild(div);
         });
@@ -298,15 +397,34 @@ function renderMatches() {
     li.className = "match-row";
     li.dataset.matchId = m.id;
     li.innerHTML = `
-      <img src="${avatarFor({ photos: other.profile?.photos, photoUrl: other.profile?.photoUrl, avatarUrl: other.avatarUrl, fullName: other.fullName })}" alt="" />
+      <img alt="" />
       <div class="match-meta">
-        <div class="match-name">${other.fullName}</div>
-        <div class="match-preview">${m.lastMessage?.body ? (m.lastMessage.senderId === state.user.id ? "You: " : "") + m.lastMessage.body : (other.profile?.headline || "Say hi 👋")}</div>
+        <div class="match-name"></div>
+        <div class="match-preview"></div>
       </div>
-      <div class="match-side">
-        ${m.unreadCount > 0 ? `<span class="unread-pill">${m.unreadCount}</span>` : ""}
-        ${m.lastMessage ? `<span class="match-ts">${timeAgo(m.lastMessage.createdAt)}</span>` : ""}
-      </div>`;
+      <div class="match-side"></div>`;
+    li.querySelector("img").src = avatarFor({
+      photos: other.profile?.photos, photoUrl: other.profile?.photoUrl,
+      avatarUrl: other.avatarUrl, fullName: other.fullName,
+    });
+    li.querySelector(".match-name").textContent = other.fullName || "";
+    const preview = m.lastMessage?.body
+      ? (m.lastMessage.senderId === state.user.id ? "You: " : "") + m.lastMessage.body
+      : (other.profile?.headline || "Say hi 👋");
+    li.querySelector(".match-preview").textContent = preview;
+    const side = li.querySelector(".match-side");
+    if (m.unreadCount > 0) {
+      const pill = document.createElement("span");
+      pill.className = "unread-pill";
+      pill.textContent = String(m.unreadCount);
+      side.appendChild(pill);
+    }
+    if (m.lastMessage) {
+      const ts = document.createElement("span");
+      ts.className = "match-ts";
+      ts.textContent = timeAgo(m.lastMessage.createdAt);
+      side.appendChild(ts);
+    }
     li.addEventListener("click", () => openChat(m.id));
     matchesList.appendChild(li);
   });
@@ -323,14 +441,17 @@ function renderSaved() {
     const li = document.createElement("li");
     li.className = "match-row";
     li.innerHTML = `
-      <img src="${avatarFor(p)}" alt="" />
+      <img alt="" />
       <div class="match-meta">
-        <div class="match-name">${p.fullName}</div>
-        <div class="match-preview">${p.headline || ""}</div>
+        <div class="match-name"></div>
+        <div class="match-preview"></div>
       </div>
-      <div class="match-side">
-        <button class="ghost" data-unsave-target="${p.userId}">Remove</button>
-      </div>`;
+      <div class="match-side"><button class="ghost">Remove</button></div>`;
+    li.querySelector("img").src = avatarFor(p);
+    li.querySelector(".match-name").textContent = p.fullName || "";
+    li.querySelector(".match-preview").textContent = p.headline || "";
+    const removeBtn = li.querySelector("button");
+    removeBtn.dataset.unsaveTarget = p.userId;
     li.addEventListener("click", (ev) => {
       if (ev.target?.dataset?.unsaveTarget) return;
       openDetail(p);
@@ -345,27 +466,38 @@ function updateUnreadDot() {
 }
 
 // ---------- swipe ----------
+function dirToServer(d) {
+  if (d === "right") return "RIGHT";
+  if (d === "super") return "SUPER_LIKE";
+  return "LEFT";
+}
 async function onSwipe(direction, profile) {
-  haptic(direction === "right" ? 18 : 8);
+  haptic(direction === "right" ? 18 : direction === "super" ? 28 : 8);
+  const inPool = state.pool.some((p) => p.userId === profile.userId);
   state.swipeHistory.push({ userId: profile.userId, direction });
-  state.index += 1;
+  if (inPool) state.index += 1;
   try {
     const res = await api("/swipes", {
       method: "POST",
-      body: JSON.stringify({ toUserId: profile.userId, direction: direction === "right" ? "RIGHT" : "LEFT" }),
+      body: JSON.stringify({ toUserId: profile.userId, direction: dirToServer(direction) }),
     });
     if (res.matched) {
       haptic(40);
       showMatchModal(profile, res);
       loadMatches();
     } else {
-      statusText.textContent = direction === "right" ? `Liked ${profile.fullName}.` : `Passed on ${profile.fullName}.`;
+      const verb = direction === "right" ? "Liked" : direction === "super" ? "Super-liked" : "Passed on";
+      statusText.textContent = `${verb} ${profile.fullName}.`;
     }
   } catch (e) {
-    if (e.status === 429) { qs("proModal").hidden = false; }
-    statusText.textContent = e.message;
+    if (e.status === 429) {
+      openModal(qs("proModal"));
+      statusText.textContent = "You've used your free swipes for today. Pro is unlimited.";
+    } else {
+      statusText.textContent = e.message;
+    }
   }
-  renderDeck();
+  if (inPool) renderDeck();
 }
 
 function showMatchModal(profile, res) {
@@ -376,7 +508,7 @@ function showMatchModal(profile, res) {
     const li = document.createElement("li");
     li.textContent = prompt;
     li.addEventListener("click", async () => {
-      qs("matchModal").hidden = true;
+      closeModal(qs("matchModal"));
       await loadMatches();
       const match = state.matches.find((m) => m.other?.id === profile.userId);
       if (match) {
@@ -385,21 +517,24 @@ function showMatchModal(profile, res) {
     });
     list.appendChild(li);
   });
-  qs("matchModal").hidden = false;
+  openModal(qs("matchModal"));
   qs("matchModalChat").onclick = async () => {
-    qs("matchModal").hidden = true;
+    closeModal(qs("matchModal"));
     await loadMatches();
     const match = state.matches.find((m) => m.other?.id === profile.userId);
     if (match) openChat(match.id);
   };
-  qs("matchModalClose").onclick = () => (qs("matchModal").hidden = true);
+  qs("matchModalClose").onclick = () => (closeModal(qs("matchModal")));
 }
 
 function fling(direction) {
   const card = deck.querySelector(".card:last-child");
   if (!card || !card._profile) return;
   const profile = card._profile;
-  card.style.transform = direction === "right" ? "translate(520px,40px) rotate(20deg)" : "translate(-520px,40px) rotate(-20deg)";
+  card.style.transform =
+    direction === "right" ? "translate(520px,40px) rotate(20deg)" :
+    direction === "super" ? "translate(0,-560px) scale(0.9)" :
+    "translate(-520px,40px) rotate(-20deg)";
   card.style.opacity = "0";
   setTimeout(() => onSwipe(direction, profile), 130);
 }
@@ -509,14 +644,30 @@ function renderPreviewCard() {
   const p = gatherProfilePayload();
   p.fullName = state.user?.fullName || "";
   const photo = p.photos?.[0] || avatarFor(p);
-  qs("previewCard").innerHTML = `
-    <img src="${photo}" alt="" />
-    <h3>${p.fullName}</h3>
-    <p class="role">${p.headline || ""}</p>
-    <p class="meta">${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote" : ""}</p>
-    <p class="bio">${p.bio || ""}</p>
-    <ul class="tags">${(p.industries || []).slice(0, 4).map((t) => `<li>${t}</li>`).join("")}</ul>
-    <p class="meta" style="margin-top:10px;">${p.lookingFor?.length ? `Looking for: ${p.lookingFor.join(", ")}` : ""}</p>`;
+  const card = qs("previewCard");
+  card.innerHTML = `
+    <img alt="" />
+    <h3></h3>
+    <p class="role"></p>
+    <p class="meta"></p>
+    <p class="bio"></p>
+    <ul class="tags"></ul>
+    <p class="meta lf" style="margin-top:10px;"></p>`;
+  card.querySelector("img").src = photo;
+  card.querySelector("h3").textContent = p.fullName;
+  card.querySelector(".role").textContent = p.headline || "";
+  card.querySelector(".meta").textContent =
+    `${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote" : ""}`;
+  card.querySelector(".bio").textContent = p.bio || "";
+  const tags = card.querySelector(".tags");
+  (p.industries || []).slice(0, 4).forEach((t) => {
+    const li = document.createElement("li");
+    li.textContent = t;
+    tags.appendChild(li);
+  });
+  card.querySelector(".lf").textContent = p.lookingFor?.length
+    ? `Looking for: ${p.lookingFor.join(", ")}`
+    : "";
 }
 
 qs("wizardNext").addEventListener("click", () => {
@@ -608,6 +759,7 @@ qs("registerForm").addEventListener("submit", async (e) => {
     const data = await api("/auth/register", { method: "POST", body: JSON.stringify({
       email: fd.get("email"), password: fd.get("password"), fullName: fd.get("fullName"), referredBy: fd.get("referredBy") || null,
     }) });
+    state.pendingVerifyUrl = data.verifyUrl || null;
     await onAuthSuccess(data.token, data.user, null);
   } catch (err) { showAuthError("registerError", err.message); }
 });
@@ -618,8 +770,61 @@ document.querySelectorAll(".auth-tab").forEach((btn) => {
     const target = btn.dataset.authTab;
     qs("loginForm").hidden = target !== "login";
     qs("registerForm").hidden = target !== "register";
+    qs("forgotForm").hidden = true;
+    qs("resetForm").hidden = true;
   });
 });
+
+qs("forgotLink").addEventListener("click", (e) => {
+  e.preventDefault();
+  qs("loginForm").hidden = true;
+  qs("registerForm").hidden = true;
+  qs("forgotForm").hidden = false;
+});
+qs("forgotCancel").addEventListener("click", () => {
+  qs("forgotForm").hidden = true;
+  qs("loginForm").hidden = false;
+});
+qs("forgotForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  showAuthError("forgotError", "");
+  const fd = new FormData(e.target);
+  try {
+    const r = await api("/auth/forgot", { method: "POST", body: JSON.stringify({ email: fd.get("email") }) });
+    const hint = qs("forgotHint");
+    if (r.resetUrl) {
+      hint.innerHTML = `Dev mode: <a href="${r.resetUrl}">${r.resetUrl}</a>`;
+    } else {
+      hint.textContent = "If that email exists, a reset link is on the way.";
+    }
+    hint.hidden = false;
+  } catch (err) { showAuthError("forgotError", err.message); }
+});
+
+qs("resetForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  showAuthError("resetError", "");
+  const fd = new FormData(e.target);
+  try {
+    const r = await api("/auth/reset", { method: "POST", body: JSON.stringify({ token: state.pendingResetToken, password: fd.get("password") }) });
+    if (r.token) {
+      const me = await fetchMeWithToken(r.token);
+      await onAuthSuccess(r.token, me.user, me.profile);
+    }
+  } catch (err) { showAuthError("resetError", err.message); }
+});
+
+// Check URL for ?reset=<token> on load and surface the reset form.
+(function checkResetParam() {
+  const params = new URLSearchParams(location.search);
+  const t = params.get("reset");
+  if (t) {
+    state.pendingResetToken = t;
+    qs("loginForm").hidden = true;
+    qs("registerForm").hidden = true;
+    qs("resetForm").hidden = false;
+  }
+})();
 async function fetchMeWithToken(token) {
   const res = await fetch(`${API_BASE}/me`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error("Could not fetch /me");
@@ -654,13 +859,31 @@ function updateChrome() {
   qs("planBadge").hidden = false;
   qs("planBadge").textContent = state.user?.planTier === "PRO" ? "PRO" : "FREE";
   qs("planBadge").classList.toggle("pro", state.user?.planTier === "PRO");
-  qs("settingsPlan").textContent = state.user?.planTier || "FREE";
+  qs("settingsPlan").textContent =
+    state.user?.planTier === "PRO"
+      ? `PRO${state.user?.planExpiresAt ? ` · until ${new Date(state.user.planExpiresAt).toLocaleDateString()}` : ""}`
+      : "FREE";
   qs("settingsReferral").textContent = state.user?.referralCode || "—";
   qs("settingsEmail").textContent = state.user?.email || "—";
   if (state.profile?.slug) {
     const link = `${API_BASE}/u/${state.profile.slug}`;
     qs("publicProfileLink").href = link;
     qs("publicProfileLink").textContent = link;
+  }
+  // Verify banner
+  const banner = qs("verifyBanner");
+  if (state.user && !state.user.emailVerified) {
+    banner.hidden = false;
+    qs("verifyDevLinkBtn").hidden = !state.pendingVerifyUrl;
+    qs("verifyDevLinkBtn").onclick = () => state.pendingVerifyUrl && (location.href = state.pendingVerifyUrl);
+  } else {
+    banner.hidden = true;
+  }
+  // Auto-detect ?verified=1 redirect from email link
+  if (new URLSearchParams(location.search).get("verified") === "1") {
+    showToast("Email verified ✓");
+    state.pendingVerifyUrl = null;
+    history.replaceState({}, "", location.pathname);
   }
 }
 
@@ -692,11 +915,18 @@ function connectWebSocket() {
   try {
     state.ws?.close();
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${location.host}/ws?token=${state.token}`);
+    const ws = new WebSocket(`${proto}//${location.host}/ws`);
     state.ws = ws;
+    ws.onopen = () => {
+      // Auth via handshake message (token no longer in URL).
+      ws.send(JSON.stringify({ type: "auth", token: state.token }));
+    };
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
+        if (msg.type === "auth_ok") {
+          state.wsReconnectAttempts = 0;
+        }
         if (msg.type === "message") {
           if (state.activeMatch?.conversation?.id === msg.message.conversationId) {
             appendMessage(msg.message);
@@ -712,13 +942,26 @@ function connectWebSocket() {
         }
       } catch {}
     };
+    ws.onclose = () => {
+      if (!state.token) return; // logged out
+      state.wsReconnectAttempts += 1;
+      const delay = Math.min(30_000, 1000 * 2 ** Math.min(state.wsReconnectAttempts, 5));
+      setTimeout(connectWebSocket, delay);
+    };
+    ws.onerror = () => { try { ws.close(); } catch {} };
   } catch {}
 }
 function appendMessage(m) {
   const box = qs("messages");
   const div = document.createElement("div");
   div.className = `msg ${m.senderId === state.user.id ? "me" : "them"}`;
-  div.innerHTML = `${m.body}${m.createdAt ? `<span class="ts">${timeAgo(m.createdAt)}</span>` : ""}`;
+  div.textContent = m.body || "";
+  if (m.createdAt) {
+    const ts = document.createElement("span");
+    ts.className = "ts";
+    ts.textContent = timeAgo(m.createdAt);
+    div.appendChild(ts);
+  }
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
@@ -784,6 +1027,23 @@ qs("requestVideoBtn").addEventListener("click", async () => {
 // ---------- swipe buttons / filters / search ----------
 qs("leftBtn").addEventListener("click", () => fling("left"));
 qs("rightBtn").addEventListener("click", () => fling("right"));
+qs("superLikeBtn").addEventListener("click", () => fling("super"));
+
+// Keyboard shortcuts for swipe (only when discover view is active and no modal open)
+document.addEventListener("keydown", (e) => {
+  const swipeActive = qs("view-swipe")?.classList.contains("active");
+  const anyModal = document.querySelector(".modal:not([hidden])");
+  const inField = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+  if (!swipeActive || anyModal || inField) return;
+  switch (e.key) {
+    case "ArrowLeft": e.preventDefault(); fling("left"); break;
+    case "ArrowRight": e.preventDefault(); fling("right"); break;
+    case "ArrowUp": e.preventDefault(); fling("super"); break;
+    case "z": case "Z": e.preventDefault(); qs("undoBtn").click(); break;
+    case "s": case "S": e.preventDefault(); qs("saveBtn").click(); break;
+    case "d": case "D": e.preventDefault(); qs("detailBtn").click(); break;
+  }
+});
 qs("undoBtn").addEventListener("click", () => {
   if (state.index > 0) state.index -= 1;
   state.swipeHistory.pop();
@@ -806,10 +1066,35 @@ qs("filtersToggle").addEventListener("click", () => {
   r.hidden = !r.hidden;
 });
 
+function renderActiveFilterChips() {
+  let chipRow = document.getElementById("activeFilterChips");
+  if (!chipRow) {
+    chipRow = document.createElement("div");
+    chipRow.id = "activeFilterChips";
+    chipRow.className = "filter-chip-row";
+    qs("filtersRow").after(chipRow);
+  }
+  const active = [];
+  if (state.filters.stage) active.push({ key: "stage", label: state.filters.stage });
+  if (state.filters.lookingFor) active.push({ key: "lookingFor", label: state.filters.lookingFor });
+  if (state.filters.industry && state.filters.industry !== "all") active.push({ key: "industry", label: state.filters.industry });
+  chipRow.innerHTML = active.map((a) => `<span class="filter-chip">${a.label}<button type="button" data-filter="${a.key}" aria-label="Remove filter ${a.label}">✕</button></span>`).join("");
+  chipRow.querySelectorAll("button[data-filter]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const k = b.dataset.filter;
+      state.filters[k] = k === "industry" ? "all" : "";
+      qs(k === "industry" ? "industryFilter" : k === "stage" ? "filterStage" : "filterLookingFor").value = k === "industry" ? "all" : "";
+      renderActiveFilterChips();
+      loadDiscover();
+    }),
+  );
+}
+
 ["filterStage", "filterLookingFor", "industryFilter"].forEach((id) => {
   qs(id).addEventListener("change", (e) => {
     const key = id === "industryFilter" ? "industry" : id === "filterStage" ? "stage" : "lookingFor";
     state.filters[key] = e.target.value;
+    renderActiveFilterChips();
     loadDiscover();
   });
 });
@@ -869,13 +1154,56 @@ savedList.addEventListener("click", async (e) => {
 // ---------- settings, plan, push, install ----------
 qs("settingsBtn").addEventListener("click", () => show("settings"));
 qs("logoutBtn").addEventListener("click", logout);
-qs("planBadge").addEventListener("click", () => (qs("proModal").hidden = false));
-qs("upgradeBtn").addEventListener("click", () => (qs("proModal").hidden = false));
-qs("proCloseBtn").addEventListener("click", () => (qs("proModal").hidden = true));
+
+qs("deleteAccountBtn").addEventListener("click", async () => {
+  if (!confirm("Permanently delete your account and all your data? This cannot be undone.")) return;
+  try {
+    await api("/me", { method: "DELETE" });
+    logout();
+  } catch (e) { alert(e.message); }
+});
+
+qs("manageBlocksBtn").addEventListener("click", async () => {
+  const wrap = qs("blockedListWrap");
+  if (!wrap.hidden) { wrap.hidden = true; return; }
+  try {
+    const blocks = await api("/blocks");
+    const list = qs("blockedList");
+    list.innerHTML = "";
+    if (!blocks.length) {
+      list.innerHTML = `<li class="hint">No one is blocked.</li>`;
+    } else {
+      blocks.forEach((b) => {
+        const li = document.createElement("li");
+        li.className = "match-row";
+        li.innerHTML = `
+          <div class="match-meta">
+            <div class="match-name"></div>
+            <div class="match-preview"></div>
+          </div>
+          <button class="ghost">Unblock</button>`;
+        li.querySelector(".match-name").textContent = b.fullName || "Unknown";
+        li.querySelector(".match-preview").textContent = b.headline || "";
+        li.querySelector("button").dataset.unblock = b.targetId;
+        list.appendChild(li);
+      });
+      list.querySelectorAll("button[data-unblock]").forEach((b) =>
+        b.addEventListener("click", async () => {
+          await api(`/blocks/${b.dataset.unblock}`, { method: "DELETE" });
+          qs("manageBlocksBtn").click(); qs("manageBlocksBtn").click(); // refresh
+        }),
+      );
+    }
+    wrap.hidden = false;
+  } catch (e) { alert(e.message); }
+});
+qs("planBadge").addEventListener("click", () => openModal(qs("proModal")));
+qs("upgradeBtn").addEventListener("click", () => openModal(qs("proModal")));
+qs("proCloseBtn").addEventListener("click", () => closeModal(qs("proModal")));
 qs("proConfirmBtn").addEventListener("click", async () => {
   await api("/plan/upgrade", { method: "POST" });
   state.user.planTier = "PRO";
-  qs("proModal").hidden = true;
+  closeModal(qs("proModal"));
   updateChrome();
   loadLikedYou();
 });
@@ -919,6 +1247,7 @@ qs("installAppBtn").addEventListener("click", async () => {
 // ---------- boot ----------
 async function boot() {
   enforceChipMax();
+  ["matchModal", "proModal", "detailModal"].forEach((id) => wireModal(qs(id)));
   await setupGoogle();
   if (state.token) {
     try {

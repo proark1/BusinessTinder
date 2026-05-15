@@ -11,6 +11,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { scoreProfile, rankProfiles, diversify } from './scoring.js';
 import { moderateText } from './moderation.js';
 import { suggestIcebreakers } from './icebreakers.js';
+import { rateLimit } from './rateLimit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -23,8 +24,16 @@ try {
 }
 
 const app = express();
+app.set('trust proxy', 1); // honor X-Forwarded-For for rate limiting behind a proxy
 app.use(cors());
 app.use(express.json({ limit: '4mb' })); // big enough for a small photo dataURL
+
+const limits = {
+  authStrict: rateLimit({ key: 'auth-strict', limit: 8, windowMs: 60_000 }),       // login/register/forgot/reset/google
+  swipe: rateLimit({ key: 'swipe', limit: 60, windowMs: 60_000 }),
+  message: rateLimit({ key: 'msg', limit: 90, windowMs: 60_000 }),
+  general: rateLimit({ key: 'gen', limit: 240, windowMs: 60_000 }),
+};
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const DATABASE_URL = process.env.DATABASE_URL || process.env.RAILWAY_DATABASE_URL;
@@ -97,6 +106,15 @@ function sendToUser(userId, payload) {
   return true;
 }
 
+function effectivePlanTier(user) {
+  if (!user) return 'FREE';
+  if (user.planTier === 'PRO') {
+    if (!user.planExpiresAt) return 'PRO';
+    if (new Date(user.planExpiresAt).getTime() > Date.now()) return 'PRO';
+    return 'FREE';
+  }
+  return user.planTier || 'FREE';
+}
 function publicUser(user) {
   if (!user) return null;
   return {
@@ -104,9 +122,18 @@ function publicUser(user) {
     email: user.email,
     fullName: user.fullName,
     avatarUrl: user.avatarUrl || null,
-    planTier: user.planTier || 'FREE',
+    planTier: effectivePlanTier(user),
+    planExpiresAt: user.planExpiresAt || null,
     referralCode: user.referralCode || null,
+    emailVerified: !!user.emailVerified,
+    verified: !!user.verified,
   };
+}
+
+function isPhotoDataUrlSafe(v) {
+  if (typeof v !== 'string') return false;
+  // Strict: only base64-encoded PNG/JPEG/WebP data URLs.
+  return /^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(v);
 }
 
 function sign(user, extra = {}) {
@@ -262,7 +289,27 @@ app.get('/auth/config', (_req, res) => {
   });
 });
 
-app.post('/auth/register', async (req, res) => {
+async function applyReferralPayout(newUser, code) {
+  if (!code) return newUser;
+  let inviter;
+  if (prisma) inviter = await prisma.user.findUnique({ where: { referralCode: code } });
+  else inviter = mem.users.find((u) => u.referralCode === code);
+  if (!inviter || inviter.id === newUser.id) return newUser;
+  const reward = new Date(Date.now() + 30 * 86400_000);
+  if (prisma) {
+    await prisma.user.update({ where: { id: inviter.id }, data: { planTier: 'PRO', planExpiresAt: reward } });
+    return prisma.user.update({
+      where: { id: newUser.id },
+      data: { planTier: 'PRO', planExpiresAt: reward, referredBy: inviter.id },
+    });
+  }
+  inviter.planTier = 'PRO'; inviter.planExpiresAt = reward.toISOString();
+  newUser.planTier = 'PRO'; newUser.planExpiresAt = reward.toISOString();
+  newUser.referredBy = inviter.id;
+  return newUser;
+}
+
+app.post('/auth/register', limits.authStrict, async (req, res) => {
   const { email, password, fullName, referredBy } = req.body || {};
   if (!email || !password || !fullName) return res.status(400).json({ error: 'Missing fields' });
   if (String(password).length < 6) return res.status(400).json({ error: 'Password too short (min 6)' });
@@ -270,21 +317,27 @@ app.post('/auth/register', async (req, res) => {
   if (existing) return res.status(409).json({ error: 'Email already registered' });
   const passwordHash = await bcrypt.hash(password, 10);
   const referralCode = randomCode(8);
+  const verificationToken = randomCode(24);
   let user;
   if (prisma) {
-    user = await prisma.user.create({ data: { email, passwordHash, fullName, referralCode, referredBy: referredBy || null } });
+    user = await prisma.user.create({ data: { email, passwordHash, fullName, referralCode, verificationToken } });
   } else {
     user = {
       id: crypto.randomUUID(), email, passwordHash, fullName, avatarUrl: null,
-      planTier: 'FREE', referralCode, referredBy: referredBy || null,
+      planTier: 'FREE', referralCode, referredBy: null,
       swipesToday: 0, lastSwipeDay: null,
+      emailVerified: false, verificationToken,
+      verified: false,
     };
     mem.users.push(user);
   }
-  res.json({ token: sign(user), user: publicUser(user) });
+  user = await applyReferralPayout(user, referredBy);
+  // In dev, expose verifyUrl so the client/test can complete the flow without SMTP.
+  const verifyUrl = NODE_ENV === 'production' ? undefined : `/auth/verify?token=${verificationToken}`;
+  res.json({ token: sign(user), user: publicUser(user), verifyUrl });
 });
 
-app.post('/auth/login', async (req, res) => {
+app.post('/auth/login', limits.authStrict, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
   const user = await findUserByEmail(email);
@@ -294,7 +347,7 @@ app.post('/auth/login', async (req, res) => {
   res.json({ token: sign(user), user: publicUser(user) });
 });
 
-app.post('/auth/google', async (req, res) => {
+app.post('/auth/google', limits.authStrict, async (req, res) => {
   if (!googleClient) return res.status(503).json({ error: 'Google login not configured' });
   const { credential, referredBy } = req.body || {};
   if (!credential) return res.status(400).json({ error: 'Missing credential' });
@@ -341,6 +394,66 @@ app.post('/auth/google', async (req, res) => {
   res.json({ token: sign(user), user: publicUser(user) });
 });
 
+app.get('/auth/verify', limits.authStrict, async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).send('Missing token');
+  let user;
+  if (prisma) {
+    user = await prisma.user.findUnique({ where: { verificationToken: String(token) } });
+    if (!user) return res.status(404).send('Invalid or expired token');
+    await prisma.user.update({ where: { id: user.id }, data: { emailVerified: true, verificationToken: null } });
+  } else {
+    user = mem.users.find((u) => u.verificationToken === token);
+    if (!user) return res.status(404).send('Invalid or expired token');
+    user.emailVerified = true;
+    user.verificationToken = null;
+  }
+  // Browser-friendly redirect back to the app.
+  res.redirect('/?verified=1');
+});
+
+app.post('/auth/forgot', limits.authStrict, async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'Email required' });
+  const user = await findUserByEmail(email);
+  // Always respond OK so we don't leak which emails exist.
+  if (!user) return res.json({ ok: true });
+  const token = randomCode(32);
+  const expiresAt = new Date(Date.now() + 60 * 60_000); // 1h
+  if (prisma) {
+    await prisma.user.update({ where: { id: user.id }, data: { resetToken: token, resetTokenExpiresAt: expiresAt } });
+  } else {
+    user.resetToken = token;
+    user.resetTokenExpiresAt = expiresAt.toISOString();
+  }
+  const resetUrl = NODE_ENV === 'production' ? undefined : `/?reset=${token}`;
+  res.json({ ok: true, resetUrl });
+});
+
+app.post('/auth/reset', limits.authStrict, async (req, res) => {
+  const { token, password } = req.body || {};
+  if (!token || !password) return res.status(400).json({ error: 'token and password required' });
+  if (String(password).length < 6) return res.status(400).json({ error: 'Password too short (min 6)' });
+  let user;
+  if (prisma) user = await prisma.user.findUnique({ where: { resetToken: token } });
+  else user = mem.users.find((u) => u.resetToken === token);
+  if (!user) return res.status(404).json({ error: 'Invalid or expired token' });
+  const exp = user.resetTokenExpiresAt ? new Date(user.resetTokenExpiresAt).getTime() : 0;
+  if (exp < Date.now()) return res.status(400).json({ error: 'Token expired' });
+  const passwordHash = await bcrypt.hash(password, 10);
+  if (prisma) {
+    user = await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, resetToken: null, resetTokenExpiresAt: null },
+    });
+  } else {
+    user.passwordHash = passwordHash;
+    user.resetToken = null;
+    user.resetTokenExpiresAt = null;
+  }
+  res.json({ ok: true, token: sign(user) });
+});
+
 app.get('/me', auth, async (req, res) => {
   const user = await findUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -361,7 +474,14 @@ function sanitizeProfile(body) {
   if (Array.isArray(out.industries)) out.industries = out.industries.slice(0, 6);
   if (Array.isArray(out.skills)) out.skills = out.skills.slice(0, 8);
   if (Array.isArray(out.pastCompanies)) out.pastCompanies = out.pastCompanies.slice(0, 6);
-  if (Array.isArray(out.photos)) out.photos = out.photos.filter(Boolean).slice(0, 5);
+  if (Array.isArray(out.photos)) {
+    out.photos = out.photos.filter(Boolean).slice(0, 5);
+    for (const p of out.photos) {
+      if (!isPhotoDataUrlSafe(p) && !/^https?:\/\//.test(p)) {
+        return { error: 'Photos must be PNG/JPEG/WebP (base64 data URL) or https URLs.' };
+      }
+    }
+  }
   if (Array.isArray(out.photos) && out.photos.length && !out.photoUrl) out.photoUrl = out.photos[0];
   if (out.hoursPerWeek != null) out.hoursPerWeek = Math.max(0, Math.min(80, Number(out.hoursPerWeek) || 0));
   for (const field of ['headline', 'bio']) {
@@ -450,13 +570,31 @@ app.get('/discover', auth, async (req, res) => {
     if (filters.location) filtered = filtered.filter((p) => (p.location || '').toLowerCase().includes(filters.location));
   }
 
+  // Boost: anyone who SUPER_LIKEd the current user jumps to the top.
+  let superLikers;
+  if (prisma) {
+    superLikers = await prisma.swipe.findMany({
+      where: { toUserId: mine, direction: 'SUPER_LIKE' }, select: { fromUserId: true },
+    });
+  } else {
+    superLikers = mem.swipes.filter((s) => s.toUserId === mine && s.direction === 'SUPER_LIKE');
+  }
+  const boostSet = new Set(superLikers.map((s) => s.fromUserId));
+
   const ranked = diversify(rankProfiles(meProfile, filtered));
+  ranked.sort((a, b) => {
+    const aB = boostSet.has(a.profile.userId) ? 1 : 0;
+    const bB = boostSet.has(b.profile.userId) ? 1 : 0;
+    if (aB !== bB) return bB - aB;
+    return 0; // preserve ranked order
+  });
   const out = ranked.map(({ profile, score, reasons }) => ({
     ...profile,
     fullName: profile.user?.fullName,
     avatarUrl: profile.photoUrl || profile.avatarUrl || profile.user?.avatarUrl,
     matchScore: score,
     matchReasons: reasons,
+    superLikedYou: boostSet.has(profile.userId),
   }));
   res.json(out);
 });
@@ -498,15 +636,15 @@ app.get('/search', auth, async (req, res) => {
   );
 });
 
-app.post('/swipes', auth, async (req, res) => {
+app.post('/swipes', auth, limits.swipe, async (req, res) => {
   const { toUserId, direction } = req.body || {};
   const fromUserId = req.user.userId;
-  if (!['LEFT', 'RIGHT'].includes(direction)) return res.status(400).json({ error: 'Invalid direction' });
+  if (!['LEFT', 'RIGHT', 'SUPER_LIKE'].includes(direction)) return res.status(400).json({ error: 'Invalid direction' });
   if (await isBlocked(fromUserId, toUserId)) return res.status(403).json({ error: 'Blocked' });
 
   // Daily quota for FREE plan.
   const user = await findUserById(fromUserId);
-  if (user?.planTier !== 'PRO') {
+  if (effectivePlanTier(user) !== 'PRO') {
     const today = todayKey();
     const day = user.lastSwipeDay || null;
     const count = day === today ? user.swipesToday || 0 : 0;
@@ -528,9 +666,9 @@ app.post('/swipes', auth, async (req, res) => {
       create: { fromUserId, toUserId, direction },
     });
     const reciprocal = await prisma.swipe.findFirst({
-      where: { fromUserId: toUserId, toUserId: fromUserId, direction: 'RIGHT' },
+      where: { fromUserId: toUserId, toUserId: fromUserId, direction: { in: ['RIGHT', 'SUPER_LIKE'] } },
     });
-    if (direction === 'RIGHT' && reciprocal) {
+    if ((direction === 'RIGHT' || direction === 'SUPER_LIKE') && reciprocal) {
       const [a, b] = [fromUserId, toUserId].sort();
       const match = await prisma.match.upsert({
         where: { userAId_userBId: { userAId: a, userBId: b } },
@@ -550,9 +688,9 @@ app.post('/swipes', auth, async (req, res) => {
   mem.swipes = mem.swipes.filter((s) => !(s.fromUserId === fromUserId && s.toUserId === toUserId));
   mem.swipes.push({ id: crypto.randomUUID(), fromUserId, toUserId, direction });
   const reciprocal = mem.swipes.find(
-    (s) => s.fromUserId === toUserId && s.toUserId === fromUserId && s.direction === 'RIGHT',
+    (s) => s.fromUserId === toUserId && s.toUserId === fromUserId && (s.direction === 'RIGHT' || s.direction === 'SUPER_LIKE'),
   );
-  if (direction === 'RIGHT' && reciprocal) {
+  if ((direction === 'RIGHT' || direction === 'SUPER_LIKE') && reciprocal) {
     const [a, b] = [fromUserId, toUserId].sort();
     let match = mem.matches.find((m) => m.userAId === a && m.userBId === b);
     if (!match) {
@@ -585,7 +723,7 @@ app.get('/likes/incoming', auth, async (req, res) => {
     likers = mem.swipes.filter((s) => s.toUserId === me && s.direction === 'RIGHT' && !seen.has(s.fromUserId));
   }
   const user = await findUserById(me);
-  const isPro = user?.planTier === 'PRO';
+  const isPro = effectivePlanTier(user) === 'PRO';
   if (!isPro) return res.json({ count: likers.length, profiles: null, locked: true });
 
   let profiles;
@@ -614,32 +752,45 @@ app.get('/matches', auth, async (req, res) => {
       orderBy: { createdAt: 'desc' },
     });
     const otherIds = matches.map((m) => (m.userAId === userId ? m.userBId : m.userAId));
-    const others = await prisma.user.findMany({ where: { id: { in: otherIds } }, include: { profile: true } });
     const convs = await prisma.conversation.findMany({ where: { matchId: { in: matches.map((m) => m.id) } } });
-    const out = [];
-    for (const m of matches) {
-      const otherId = m.userAId === userId ? m.userBId : m.userAId;
-      const other = others.find((u) => u.id === otherId);
-      const conversation = convs.find((c) => c.matchId === m.id) || null;
-      let lastMessage = null;
-      let unreadCount = 0;
-      if (conversation) {
-        lastMessage = await prisma.message.findFirst({
-          where: { conversationId: conversation.id }, orderBy: { createdAt: 'desc' },
-        });
-        unreadCount = await prisma.message.count({
-          where: { conversationId: conversation.id, senderId: { not: userId }, status: { not: 'READ' } },
-        });
-      }
-      out.push({
-        ...m,
-        other: other
-          ? { id: other.id, fullName: other.fullName, avatarUrl: other.profile?.photoUrl || other.avatarUrl, profile: other.profile }
-          : null,
-        conversation, lastMessage, unreadCount,
-      });
-    }
-    return res.json(out);
+    const convIds = convs.map((c) => c.id);
+    // Single round-trip for both last-message and unread counts.
+    const [others, lastMessages, unreadGroups] = await Promise.all([
+      prisma.user.findMany({ where: { id: { in: otherIds } }, include: { profile: true } }),
+      convIds.length
+        ? prisma.$queryRaw`
+            SELECT DISTINCT ON ("conversationId") *
+            FROM "Message"
+            WHERE "conversationId" = ANY(${convIds}::text[])
+            ORDER BY "conversationId", "createdAt" DESC
+          `
+        : Promise.resolve([]),
+      convIds.length
+        ? prisma.message.groupBy({
+            by: ['conversationId'],
+            where: { conversationId: { in: convIds }, senderId: { not: userId }, status: { not: 'READ' } },
+            _count: { _all: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const lastByConv = new Map(lastMessages.map((m) => [m.conversationId, m]));
+    const unreadByConv = new Map(unreadGroups.map((g) => [g.conversationId, g._count._all]));
+    return res.json(
+      matches.map((m) => {
+        const otherId = m.userAId === userId ? m.userBId : m.userAId;
+        const other = others.find((u) => u.id === otherId);
+        const conversation = convs.find((c) => c.matchId === m.id) || null;
+        return {
+          ...m,
+          other: other
+            ? { id: other.id, fullName: other.fullName, avatarUrl: other.profile?.photoUrl || other.avatarUrl, profile: other.profile }
+            : null,
+          conversation,
+          lastMessage: conversation ? lastByConv.get(conversation.id) || null : null,
+          unreadCount: conversation ? (unreadByConv.get(conversation.id) || 0) : 0,
+        };
+      }),
+    );
   }
   const matches = mem.matches
     .filter((m) => m.userAId === userId || m.userBId === userId)
@@ -687,11 +838,24 @@ app.get('/messages/:conversationId', auth, async (req, res) => {
   if (!(await canAccessConversation(req.user.userId, conversationId))) {
     return res.status(403).json({ error: 'Forbidden' });
   }
-  if (prisma) return res.json(await prisma.message.findMany({ where: { conversationId }, orderBy: { createdAt: 'asc' } }));
-  res.json(mem.messages.filter((m) => m.conversationId === conversationId));
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 50));
+  const before = req.query.before ? String(req.query.before) : null;
+  if (prisma) {
+    let beforeMsg = null;
+    if (before) beforeMsg = await prisma.message.findUnique({ where: { id: before } });
+    const where = { conversationId, ...(beforeMsg ? { createdAt: { lt: beforeMsg.createdAt } } : {}) };
+    const messages = await prisma.message.findMany({ where, orderBy: { createdAt: 'desc' }, take: limit });
+    return res.json(messages.reverse());
+  }
+  let all = mem.messages.filter((m) => m.conversationId === conversationId);
+  if (before) {
+    const idx = all.findIndex((m) => m.id === before);
+    if (idx >= 0) all = all.slice(0, idx);
+  }
+  res.json(all.slice(-limit));
 });
 
-app.post('/messages/:conversationId', auth, async (req, res) => {
+app.post('/messages/:conversationId', auth, limits.message, async (req, res) => {
   const { conversationId } = req.params;
   const { body, kind } = req.body || {};
   if (!body) return res.status(400).json({ error: 'Missing body' });
@@ -848,6 +1012,83 @@ app.get('/icebreakers', auth, async (req, res) => {
   res.json({ prompts: suggestIcebreakers(them) });
 });
 
+app.delete('/me', auth, async (req, res) => {
+  const me = req.user.userId;
+  if (prisma) {
+    // Find this user's matches first so we can drop the linked conversations
+    // (there is no FK cascade from Match → Conversation in the schema).
+    const myMatches = await prisma.match.findMany({
+      where: { OR: [{ userAId: me }, { userBId: me }] }, select: { id: true },
+    });
+    const matchIds = myMatches.map((m) => m.id);
+    if (matchIds.length) {
+      // Cascade from Conversation → Message via the existing FK relation.
+      await prisma.conversation.deleteMany({ where: { matchId: { in: matchIds } } });
+    }
+    await prisma.savedProfile.deleteMany({ where: { OR: [{ userId: me }, { profileUserId: me }] } });
+    await prisma.report.deleteMany({ where: { OR: [{ reporterId: me }, { targetId: me }] } });
+    await prisma.block.deleteMany({ where: { OR: [{ blockerId: me }, { targetId: me }] } });
+    await prisma.match.deleteMany({ where: { id: { in: matchIds } } });
+    await prisma.user.delete({ where: { id: me } });
+  } else {
+    const myMatchIds = new Set(
+      mem.matches.filter((m) => m.userAId === me || m.userBId === me).map((m) => m.id),
+    );
+    const myConvIds = new Set(
+      mem.conversations.filter((c) => myMatchIds.has(c.matchId)).map((c) => c.id),
+    );
+    mem.users = mem.users.filter((u) => u.id !== me);
+    mem.profiles = mem.profiles.filter((p) => p.userId !== me);
+    mem.swipes = mem.swipes.filter((s) => s.fromUserId !== me && s.toUserId !== me);
+    mem.matches = mem.matches.filter((m) => m.userAId !== me && m.userBId !== me);
+    mem.conversations = mem.conversations.filter((c) => !myConvIds.has(c.id));
+    mem.messages = mem.messages.filter((m) => m.senderId !== me && !myConvIds.has(m.conversationId));
+    mem.saved = mem.saved.filter((s) => s.userId !== me && s.profileUserId !== me);
+    mem.reports = mem.reports.filter((r) => r.reporterId !== me && r.targetId !== me);
+    mem.blocks = mem.blocks.filter((b) => b.blockerId !== me && b.targetId !== me);
+    mem.pushSubs = mem.pushSubs.filter((s) => s.userId !== me);
+  }
+  res.json({ ok: true });
+});
+
+app.get('/blocks', auth, async (req, res) => {
+  const me = req.user.userId;
+  let blocks;
+  if (prisma) {
+    blocks = await prisma.block.findMany({ where: { blockerId: me } });
+    const ids = blocks.map((b) => b.targetId);
+    const users = await prisma.user.findMany({
+      where: { id: { in: ids } },
+      include: { profile: true },
+    });
+    return res.json(
+      blocks.map((b) => {
+        const u = users.find((x) => x.id === b.targetId);
+        return { id: b.id, targetId: b.targetId, createdAt: b.createdAt, fullName: u?.fullName || null, headline: u?.profile?.headline || null };
+      }),
+    );
+  }
+  blocks = mem.blocks.filter((b) => b.blockerId === me);
+  res.json(
+    blocks.map((b) => {
+      const u = mem.users.find((x) => x.id === b.targetId);
+      const p = mem.profiles.find((x) => x.userId === b.targetId);
+      return { id: b.id, targetId: b.targetId, createdAt: b.createdAt, fullName: u?.fullName || null, headline: p?.headline || null };
+    }),
+  );
+});
+
+app.delete('/blocks/:targetId', auth, async (req, res) => {
+  const me = req.user.userId;
+  const targetId = req.params.targetId;
+  if (prisma) {
+    await prisma.block.deleteMany({ where: { blockerId: me, targetId } });
+  } else {
+    mem.blocks = mem.blocks.filter((b) => !(b.blockerId === me && b.targetId === targetId));
+  }
+  res.json({ ok: true });
+});
+
 // Public profile page (server-rendered, no auth)
 app.get('/u/:slug', async (req, res) => {
   const p = await findProfileBySlug(req.params.slug);
@@ -855,23 +1096,39 @@ app.get('/u/:slug', async (req, res) => {
   const user = await findUserById(p.userId);
   const safe = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const tags = (arr) => (arr || []).map((t) => `<li>${safe(t)}</li>`).join('');
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Person',
+    name: user?.fullName,
+    jobTitle: p.headline,
+    address: { '@type': 'PostalAddress', addressLocality: p.location },
+    image: p.photoUrl || user?.avatarUrl || undefined,
+    sameAs: p.linkedinUrl ? [p.linkedinUrl] : undefined,
+    description: p.bio,
+  };
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${safe(user?.fullName || 'BusinessTinder profile')}</title>
+<title>${safe(user?.fullName || 'BusinessTinder profile')} · BusinessTinder</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg" />
 <link rel="stylesheet" href="/styles.css" />
+<meta name="description" content="${safe(p.headline)} — ${safe(p.bio).slice(0, 140)}" />
+<meta property="og:type" content="profile" />
 <meta property="og:title" content="${safe(user?.fullName)} · BusinessTinder" />
 <meta property="og:description" content="${safe(p.headline)}" />
-</head><body><div class="app-shell"><main class="glass pad public-card">
+<meta property="og:image" content="${safe(p.photoUrl || user?.avatarUrl || '')}" />
+<meta name="twitter:card" content="summary_large_image" />
+<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
+</head><body><div class="app-shell"><main class="glass pad public-card center">
 <img class="public-avatar" src="${safe(p.photoUrl || user?.avatarUrl || '')}" alt="" />
 <h1>${safe(user?.fullName || '')}</h1>
 <p class="role">${safe(p.headline)}</p>
 <p class="meta">${safe(p.userType)} · ${safe(p.stage)} · ${safe(p.location)}${p.remoteOk ? ' · Remote OK' : ''}</p>
-<p>${safe(p.bio)}</p>
-<ul class="tags">${tags(p.industries)}</ul>
-<ul class="tags">${tags(p.skills)}</ul>
-<p><a class="primary" href="/">Join BusinessTinder to connect</a></p>
+<p style="margin:14px 0;">${safe(p.bio)}</p>
+<ul class="tags" style="justify-content:center;">${tags(p.industries)}</ul>
+<ul class="tags" style="justify-content:center;">${tags(p.skills)}</ul>
+<a class="primary" style="display:inline-block;margin-top:18px;padding:14px 22px;text-decoration:none;border-radius:14px;" href="/?invite=${safe(user?.referralCode || '')}">Connect with ${safe((user?.fullName || '').split(' ')[0] || 'them')} on BusinessTinder</a>
 </main></div></body></html>`);
 });
 
@@ -896,14 +1153,37 @@ app.use(express.static(STATIC_ROOT, {
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws, req) => {
-  const token = new URL(req.url, 'http://localhost').searchParams.get('token');
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    addWsClient(payload.userId, ws);
+  // Accept the URL-token form for backwards compat, but prefer an `auth` message handshake
+  // so the token doesn't end up in proxy/access logs.
+  const urlToken = new URL(req.url, 'http://localhost').searchParams.get('token');
+  let payload = null;
+  if (urlToken) {
+    try { payload = jwt.verify(urlToken, JWT_SECRET); } catch { /* fall through to handshake */ }
+  }
+  if (payload) addWsClient(payload.userId, ws);
 
-    ws.on('message', async (raw) => {
+  // If no URL token, give the client a brief window to send `{ type: 'auth', token }`.
+  const handshakeTimer = setTimeout(() => {
+    if (!payload) ws.close(1008, 'auth-timeout');
+  }, 5000);
+
+  ws.on('message', async (raw) => {
       let data;
       try { data = JSON.parse(raw.toString()); } catch { return; }
+
+      if (!payload && data.type === 'auth') {
+        try {
+          payload = jwt.verify(data.token, JWT_SECRET);
+          clearTimeout(handshakeTimer);
+          addWsClient(payload.userId, ws);
+          ws.send(JSON.stringify({ type: 'auth_ok' }));
+        } catch {
+          ws.close(1008, 'invalid-token');
+        }
+        return;
+      }
+      if (!payload) return; // ignore everything pre-auth
+
       const userId = payload.userId;
 
       if (data.type === 'send_message') {
@@ -956,15 +1236,24 @@ wss.on('connection', (ws, req) => {
       }
     });
 
-    ws.on('close', () => removeWsClient(payload.userId, ws));
-  } catch {
-    ws.close();
-  }
+  ws.on('close', () => {
+    clearTimeout(handshakeTimer);
+    if (payload) removeWsClient(payload.userId, ws);
+  });
 });
 
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () =>
-  console.log(`Backend running on :${PORT} (${prisma ? 'postgres' : 'memory'}${googleClient ? ', google' : ''}${webpush ? ', push' : ''})`),
-);
+const isMain = (() => {
+  try {
+    return fileURLToPath(import.meta.url) === process.argv[1];
+  } catch {
+    return false;
+  }
+})();
+if (isMain) {
+  server.listen(PORT, () =>
+    console.log(`Backend running on :${PORT} (${prisma ? 'postgres' : 'memory'}${googleClient ? ', google' : ''}${webpush ? ', push' : ''})`),
+  );
+}
 
 export { app, server };

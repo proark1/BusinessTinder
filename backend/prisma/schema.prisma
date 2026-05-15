@@ -8,25 +8,31 @@ datasource db {
 }
 
 model User {
-  id             String    @id @default(cuid())
-  email          String    @unique
-  passwordHash   String
-  fullName       String
-  googleSub      String?   @unique
-  avatarUrl      String?
-  planTier       String    @default("FREE")
-  referralCode   String?   @unique
-  referredBy     String?
-  lastSwipeDay   String?
-  swipesToday    Int       @default(0)
-  notifPushOptIn Boolean   @default(false)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  profile        Profile?
-  sentSwipes     Swipe[]   @relation("sent")
-  recvSwipes     Swipe[]   @relation("recv")
-  messages       Message[]
-  pushSubs       PushSubscription[]
+  id                    String    @id @default(cuid())
+  email                 String    @unique
+  passwordHash          String
+  fullName              String
+  googleSub             String?   @unique
+  avatarUrl             String?
+  planTier              String    @default("FREE")
+  planExpiresAt         DateTime?
+  referralCode          String?   @unique
+  referredBy            String?
+  lastSwipeDay          String?
+  swipesToday           Int       @default(0)
+  notifPushOptIn        Boolean   @default(false)
+  emailVerified         Boolean   @default(false)
+  verificationToken     String?   @unique
+  resetToken            String?   @unique
+  resetTokenExpiresAt   DateTime?
+  verified              Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  profile               Profile?
+  sentSwipes            Swipe[]   @relation("sent")
+  recvSwipes            Swipe[]   @relation("recv")
+  messages              Message[]
+  pushSubs              PushSubscription[]
 }
 
 model Profile {
@@ -55,7 +61,7 @@ model Profile {
   lastActiveAt  DateTime @default(now())
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-  user          User     @relation(fields: [userId], references: [id])
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Swipe {
@@ -64,8 +70,8 @@ model Swipe {
   toUserId   String
   direction  SwipeDirection
   createdAt  DateTime       @default(now())
-  fromUser   User           @relation("sent", fields: [fromUserId], references: [id])
-  toUser     User           @relation("recv", fields: [toUserId], references: [id])
+  fromUser   User           @relation("sent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser     User           @relation("recv", fields: [toUserId], references: [id], onDelete: Cascade)
 
   @@unique([fromUserId, toUserId])
 }
@@ -94,8 +100,8 @@ model Message {
   status         MessageStatus @default(SENT)
   kind           String        @default("text")
   createdAt      DateTime      @default(now())
-  conversation   Conversation  @relation(fields: [conversationId], references: [id])
-  sender         User          @relation(fields: [senderId], references: [id])
+  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
 }
 
 model SavedProfile {
@@ -131,12 +137,13 @@ model PushSubscription {
   p256dh    String
   auth      String
   createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 enum SwipeDirection {
   LEFT
   RIGHT
+  SUPER_LIKE
 }
 
 enum MessageStatus {

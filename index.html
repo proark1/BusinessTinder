@@ -6,26 +6,135 @@
     <title>BusinessTinder</title>
     <link rel="stylesheet" href="styles.css" />
     <link rel="manifest" href="manifest.webmanifest" />
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar glass">
+      <header class="topbar glass" id="topbar" hidden>
         <h1>BusinessTinder</h1>
         <span id="completionBadge" class="completion">0% profile</span>
-        <button id="resetBtn" class="ghost" aria-label="Reset demo">Reset</button>
+        <button id="logoutBtn" class="ghost" aria-label="Log out">Log out</button>
       </header>
 
       <main>
-        <section id="view-onboarding" class="view active glass pad">
-          <h2>Build your business profile</h2>
+        <section id="view-auth" class="view active glass pad">
+          <h2>Welcome to BusinessTinder</h2>
+          <p class="hint">Match with founders, co-founders, operators and investors.</p>
+
+          <div id="googleBtnWrap" class="google-wrap"></div>
+          <p id="googleDisabledNote" class="hint" hidden>
+            Google sign-in is not configured on this server.
+          </p>
+
+          <div class="auth-tabs">
+            <button class="auth-tab active" data-auth-tab="login">Log in</button>
+            <button class="auth-tab" data-auth-tab="register">Sign up</button>
+          </div>
+
+          <form id="loginForm" class="form-grid auth-form">
+            <label>Email<input required type="email" name="email" autocomplete="email" /></label>
+            <label>Password<input required type="password" name="password" autocomplete="current-password" /></label>
+            <button class="primary" type="submit">Log in</button>
+            <p class="auth-error" id="loginError" hidden></p>
+          </form>
+
+          <form id="registerForm" class="form-grid auth-form" hidden>
+            <label>Full name<input required name="fullName" autocomplete="name" /></label>
+            <label>Email<input required type="email" name="email" autocomplete="email" /></label>
+            <label>Password<input required type="password" name="password" minlength="6" autocomplete="new-password" /></label>
+            <button class="primary" type="submit">Create account</button>
+            <p class="auth-error" id="registerError" hidden></p>
+          </form>
+        </section>
+
+        <section id="view-onboarding" class="view glass pad">
+          <h2>Build your profile</h2>
+          <p class="hint">Just enough so people can decide whether to match with you.</p>
           <form id="onboardingForm" class="form-grid">
-            <label>Name<input required name="name" placeholder="Avery Chen" /></label>
-            <label>Role<input required name="role" placeholder="Founder · FinOps" /></label>
-            <label>Bio<textarea required name="bio" rows="3" placeholder="What are you building?"></textarea></label>
-            <label>Interests<input required name="interests" placeholder="AI, SaaS, FinTech" /></label>
-            <label>Goal<input required name="goal" placeholder="Looking for pilot customers" /></label>
-            <label>Location<input required name="location" placeholder="NYC / Remote" /></label>
-            <button type="submit" class="primary">Start Matching</button>
+            <label>Headline
+              <input required maxlength="80" name="headline" placeholder="Technical co-founder, ex-Stripe" />
+            </label>
+
+            <label>I am a…
+              <select required name="userType">
+                <option value="">Select one</option>
+                <option value="founder">Founder</option>
+                <option value="cofounder_search">Looking for co-founder</option>
+                <option value="operator">Operator / early hire</option>
+                <option value="investor">Investor / angel</option>
+                <option value="advisor">Advisor / mentor</option>
+              </select>
+            </label>
+
+            <fieldset class="chip-set" data-name="lookingFor" data-max="3">
+              <legend>Looking for (up to 3)</legend>
+              <label><input type="checkbox" value="cofounder" /> Co-founder</label>
+              <label><input type="checkbox" value="hires" /> First hires</label>
+              <label><input type="checkbox" value="customers" /> Customers / pilots</label>
+              <label><input type="checkbox" value="investors" /> Investors</label>
+              <label><input type="checkbox" value="advisors" /> Advisors</label>
+              <label><input type="checkbox" value="partnerships" /> Partnerships</label>
+              <label><input type="checkbox" value="networking" /> Networking</label>
+            </fieldset>
+
+            <label>What you're building (short)
+              <textarea required name="bio" rows="3" maxlength="240" placeholder="One or two sentences. What problem, who for."></textarea>
+            </label>
+
+            <label>Stage
+              <select required name="stage">
+                <option value="">Select one</option>
+                <option value="idea">Idea</option>
+                <option value="mvp">Building MVP</option>
+                <option value="live">Live with users</option>
+                <option value="revenue">Revenue</option>
+                <option value="scaling">Scaling</option>
+              </select>
+            </label>
+
+            <fieldset class="chip-set" data-name="industries" data-max="5">
+              <legend>Industries (up to 5)</legend>
+              <label><input type="checkbox" value="AI" /> AI</label>
+              <label><input type="checkbox" value="FinTech" /> FinTech</label>
+              <label><input type="checkbox" value="HealthTech" /> HealthTech</label>
+              <label><input type="checkbox" value="Climate" /> Climate</label>
+              <label><input type="checkbox" value="DevTools" /> Dev tools</label>
+              <label><input type="checkbox" value="Consumer" /> Consumer</label>
+              <label><input type="checkbox" value="Marketplace" /> Marketplace</label>
+              <label><input type="checkbox" value="B2B SaaS" /> B2B SaaS</label>
+              <label><input type="checkbox" value="Web3" /> Web3</label>
+            </fieldset>
+
+            <fieldset class="chip-set" data-name="skills" data-max="5">
+              <legend>What you bring</legend>
+              <label><input type="checkbox" value="Engineering" /> Engineering</label>
+              <label><input type="checkbox" value="Design" /> Design</label>
+              <label><input type="checkbox" value="Product" /> Product</label>
+              <label><input type="checkbox" value="Sales" /> Sales</label>
+              <label><input type="checkbox" value="Marketing" /> Marketing</label>
+              <label><input type="checkbox" value="Ops" /> Ops</label>
+              <label><input type="checkbox" value="Domain expert" /> Domain expert</label>
+              <label><input type="checkbox" value="Capital" /> Capital</label>
+            </fieldset>
+
+            <label>Location<input required name="location" placeholder="Berlin" /></label>
+            <label class="row-check"><input type="checkbox" name="remoteOk" /> Open to remote</label>
+
+            <label>Commitment
+              <select name="commitment">
+                <option value="">—</option>
+                <option value="full_time">Full-time</option>
+                <option value="part_time">Part-time</option>
+                <option value="exploring">Exploring</option>
+              </select>
+            </label>
+
+            <label>LinkedIn URL (optional)
+              <input type="url" name="linkedinUrl" placeholder="https://linkedin.com/in/…" />
+            </label>
+
+            <button type="submit" class="primary">Save and start matching</button>
+            <p class="auth-error" id="onboardingError" hidden></p>
           </form>
         </section>
 
@@ -35,9 +144,14 @@
               <select id="industryFilter">
                 <option value="all">All</option>
                 <option value="AI">AI</option>
+                <option value="FinTech">FinTech</option>
                 <option value="HealthTech">HealthTech</option>
                 <option value="Climate">Climate</option>
-                <option value="Growth">Growth</option>
+                <option value="DevTools">Dev tools</option>
+                <option value="Consumer">Consumer</option>
+                <option value="Marketplace">Marketplace</option>
+                <option value="B2B SaaS">B2B SaaS</option>
+                <option value="Web3">Web3</option>
               </select>
             </label>
           </div>
@@ -67,11 +181,10 @@
         </section>
       </main>
 
-      <nav class="tabbar glass">
-        <button data-view="onboarding" class="tab active">Profile</button>
-        <button data-view="swipe" class="tab">Discover</button>
+      <nav class="tabbar glass" id="tabbar" hidden>
+        <button data-view="swipe" class="tab active">Discover</button>
         <button data-view="matches" class="tab">Matches</button>
-        <button data-view="chat" class="tab">Chat</button>
+        <button data-view="onboarding" class="tab">Profile</button>
       </nav>
     </div>
 

@@ -1,48 +1,30 @@
 # BusinessTinder Backend (Auth + API + Realtime)
 
-This directory contains two coexisting backend implementations:
+The production-direction backend lives in **`src/server.js`** — Express + WebSocket, Prisma against Postgres with an in-memory fallback for local demos, and it also serves the static frontend at `/` so the whole app runs from a single origin.
 
-- `server.js` (root of `backend/`) — lightweight vanilla-Node HTTP server wired into the root test suite (`backend/auth.js` helpers, file-backed persistence option, static asset serving).
-- `src/server.js` — the production-direction Express + WebSocket variant described below.
+The legacy `server.js` (root of `backend/`) is kept only for the existing test suite and is no longer used at runtime.
 
-The Express variant adds:
+## What's wired up
 
-1. Real auth (email/password JWT)
-2. OAuth onboarding endpoints (`google`, `linkedin`) for client integration scaffolding
-3. API layer for profiles/swipes/matches/messages
-4. Realtime chat transport (WebSocket) with `send_message` / `read_message` typed protocol
-5. PostgreSQL data model definition via Prisma schema in `prisma/schema.prisma`
-6. In-memory fallback when `DATABASE_URL` (or `@prisma/client`) is unavailable
+1. Email/password auth (`/auth/register`, `/auth/login`) — bcrypt + JWT
+2. **Google Sign-In** at `/auth/google` — verifies the Google ID token server-side with `google-auth-library`
+3. Profile CRUD (`/profiles`, `/profiles/me`, `/me`)
+4. Swipes/matches/discover (`/swipes`, `/matches`, `/discover`)
+5. Chat (`/messages/:conversationId` GET/POST + WebSocket `/ws`)
+6. `/health` does a real DB round-trip when Postgres is configured
+7. `/auth/config` returns the Google client ID for the frontend
 
-## Endpoints
+## Required environment variables
 
-- `GET /health`
-- `POST /auth/register`
-- `POST /auth/login`
-- `POST /auth/oauth/:provider` (`provider` = `google|linkedin`)
-- `POST /profiles` (auth)
-- `GET /discover` (auth)
-- `POST /swipes` (auth)
-- `GET /matches` (auth)
-- `GET /messages/:conversationId` (auth)
-- `POST /messages/:id/read` (auth)
-- `WS /ws?token=...`
+| Variable | Required | Notes |
+|---|---|---|
+| `DATABASE_URL` | yes in production | Postgres URL. `RAILWAY_DATABASE_URL` also accepted. Without it, dev falls back to in-memory and prod refuses to start. |
+| `JWT_SECRET` | yes in production | Any strong random string. |
+| `GOOGLE_CLIENT_ID` | optional | Without it, Google sign-in is hidden in the UI. The same value is read by the frontend. |
+| `PORT` | optional | Defaults to 4000. |
+| `NODE_ENV` | optional | Set to `production` to enable fail-fast on missing `DATABASE_URL`. |
 
-## Runtime modes
-
-- If `DATABASE_URL` (or `RAILWAY_DATABASE_URL`) is set and `@prisma/client` is installed, the server uses Prisma against PostgreSQL.
-- Otherwise it falls back to in-memory storage for quick local demos.
-
-### Railway PostgreSQL
-
-Railway typically injects `DATABASE_URL` automatically when your service is linked to a PostgreSQL database. If your project uses `RAILWAY_DATABASE_URL` instead, this backend also supports it out of the box.
-
-Recommended Railway variables:
-
-- `DATABASE_URL=${{Postgres.DATABASE_URL}}` (or keep Railway's default injected value)
-- `JWT_SECRET=<strong-random-secret>`
-
-## Run
+## Run locally
 
 ```bash
 cd backend
@@ -50,16 +32,14 @@ npm install
 npm run dev
 ```
 
-Server defaults to `http://localhost:4000`.
+Then open `http://localhost:4000`.
 
 ## DB setup (Prisma)
 
 ```bash
 cd backend
 npx prisma generate
-npx prisma migrate dev -n init
+npx prisma migrate dev -n profile_fields
 ```
 
-## Client helper
-
-`src/clientApi.js` exposes a tiny browser-side helper (`api.register`, `api.login`, …, `connectWs`) that reads/writes the JWT from `localStorage` under `bt_token` and talks to `window.__BT_API__` (default `http://localhost:4000`).
+The `Profile` model captures the matching-relevant fields: `headline`, `userType`, `lookingFor[]`, `bio`, `stage`, `industries[]`, `skills[]`, `location`, `remoteOk`, `commitment`, `linkedinUrl`, `avatarUrl`.

@@ -27,60 +27,95 @@
 
       <main>
         <!-- ========== AUTH / LANDING ========== -->
-        <section id="view-auth" class="view active glass pad">
-          <div class="landing-hero center compact">
-            <img src="/icon.svg" alt="" width="56" height="56" class="landing-logo" />
-            <h1 class="landing-headline">
-              <span class="brand-name">BusinessTinder</span>
-            </h1>
-            <p class="landing-sub">Match with founders, co-founders, operators &amp; investors.</p>
-          </div>
+        <section id="view-auth" class="view active glass pad auth-screen">
+          <header class="auth-hero">
+            <img src="/icon.svg" alt="" width="44" height="44" class="auth-logo" />
+            <span class="auth-brand brand-name">BusinessTinder</span>
+          </header>
+
+          <h1 class="auth-title" id="authTitle">Welcome back</h1>
+          <p class="auth-subtitle" id="authSubtitle">Sign in to keep matching with founders, operators &amp; investors.</p>
 
           <div id="googleBtnWrap" class="google-wrap"></div>
-          <p id="googleDisabledNote" class="hint" hidden>Google sign-in not configured.</p>
+          <p id="googleDisabledNote" class="hint center" hidden>Google sign-in not configured on this server.</p>
 
-          <div class="auth-tabs">
-            <button class="auth-tab active" data-auth-tab="login">Log in</button>
-            <button class="auth-tab" data-auth-tab="register">Sign up</button>
+          <div class="or-divider"><span>or use email</span></div>
+
+          <div class="auth-pill" role="tablist" aria-label="Sign in or sign up">
+            <button class="auth-tab active" data-auth-tab="login" role="tab" aria-selected="true">Log in</button>
+            <button class="auth-tab" data-auth-tab="register" role="tab" aria-selected="false">Sign up</button>
+            <span class="auth-pill-thumb" aria-hidden="true"></span>
           </div>
 
-          <form id="loginForm" class="form-grid">
-            <label>Email<input required type="email" name="email" autocomplete="email" /></label>
-            <label>Password<input required type="password" name="password" autocomplete="current-password" /></label>
-            <button class="primary" type="submit">Log in</button>
-            <p class="center"><a href="#" id="forgotLink" style="font-size:.86rem;">Forgot password?</a></p>
+          <form id="loginForm" class="form-grid auth-form">
+            <label class="field">
+              <span class="field-label">Email</span>
+              <input required type="email" name="email" autocomplete="email" placeholder="you@company.com" />
+            </label>
+            <label class="field">
+              <span class="field-label">Password</span>
+              <span class="pwd-wrap">
+                <input required type="password" name="password" autocomplete="current-password" placeholder="••••••••" />
+                <button type="button" class="pwd-toggle" aria-label="Show password">👁</button>
+              </span>
+            </label>
+            <button class="primary big" type="submit">Sign in</button>
+            <p class="center auth-link"><a href="#" id="forgotLink">Forgot password?</a></p>
             <p class="auth-error" id="loginError" hidden></p>
           </form>
 
-          <form id="forgotForm" class="form-grid" hidden>
-            <h3 style="color:var(--text);">Reset your password</h3>
-            <label>Email<input required type="email" name="email" autocomplete="email" /></label>
-            <button class="primary" type="submit">Send reset link</button>
-            <button class="ghost" type="button" id="forgotCancel">Back to log in</button>
+          <form id="forgotForm" class="form-grid auth-form" hidden>
+            <label class="field">
+              <span class="field-label">Email</span>
+              <input required type="email" name="email" autocomplete="email" placeholder="you@company.com" />
+            </label>
+            <button class="primary big" type="submit">Send reset link</button>
+            <button class="ghost" type="button" id="forgotCancel">Back to sign in</button>
             <p class="auth-error" id="forgotError" hidden></p>
             <p class="hint" id="forgotHint" hidden></p>
           </form>
 
-          <form id="resetForm" class="form-grid" hidden>
-            <h3 style="color:var(--text);">Pick a new password</h3>
-            <label>New password<input required type="password" name="password" minlength="6" autocomplete="new-password" /></label>
-            <button class="primary" type="submit">Save and log in</button>
+          <form id="resetForm" class="form-grid auth-form" hidden>
+            <label class="field">
+              <span class="field-label">New password</span>
+              <span class="pwd-wrap">
+                <input required type="password" name="password" minlength="6" autocomplete="new-password" placeholder="At least 6 characters" />
+                <button type="button" class="pwd-toggle" aria-label="Show password">👁</button>
+              </span>
+            </label>
+            <button class="primary big" type="submit">Save and sign in</button>
             <p class="auth-error" id="resetError" hidden></p>
           </form>
 
-          <form id="registerForm" class="form-grid" hidden>
-            <label>Full name<input required name="fullName" autocomplete="name" /></label>
-            <label>Email<input required type="email" name="email" autocomplete="email" /></label>
-            <label>Password<input required type="password" name="password" minlength="6" autocomplete="new-password" /></label>
-            <label>Referral code (optional)<input name="referredBy" placeholder="Friend's code" /></label>
-            <button class="primary" type="submit">Create account</button>
+          <form id="registerForm" class="form-grid auth-form" hidden>
+            <label class="field">
+              <span class="field-label">Your name</span>
+              <input required name="fullName" autocomplete="name" placeholder="Avery Chen" />
+            </label>
+            <label class="field">
+              <span class="field-label">Work email</span>
+              <input required type="email" name="email" autocomplete="email" placeholder="you@company.com" />
+            </label>
+            <label class="field">
+              <span class="field-label">Create a password</span>
+              <span class="pwd-wrap">
+                <input required type="password" name="password" minlength="6" autocomplete="new-password" placeholder="At least 6 characters" />
+                <button type="button" class="pwd-toggle" aria-label="Show password">👁</button>
+              </span>
+            </label>
+            <label class="field">
+              <span class="field-label">Referral code <span class="field-optional">(optional · gets you 30d Pro)</span></span>
+              <input name="referredBy" placeholder="Friend's code" />
+            </label>
+            <button class="primary big" type="submit">Create account</button>
+            <p class="hint center tiny">By creating an account you agree to be a normal human in chat.</p>
             <p class="auth-error" id="registerError" hidden></p>
           </form>
 
-          <ul class="landing-bullets" style="margin-top:18px;">
+          <ul class="value-bullets">
             <li><span class="pro-check">✓</span> Profile prompts that surface real intent</li>
             <li><span class="pro-check">✓</span> Smart matching with explainable score</li>
-            <li><span class="pro-check">✓</span> See who liked you · super-likes · Cal.com booking</li>
+            <li><span class="pro-check">✓</span> See who liked you · super-likes · Cal.com</li>
           </ul>
         </section>
 

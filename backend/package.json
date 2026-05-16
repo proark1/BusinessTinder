@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "node src/server.js",
+    "start": "node src/start.js",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
@@ -14,10 +16,8 @@
     "express": "^4.19.2",
     "google-auth-library": "^10.6.2",
     "jsonwebtoken": "^9.0.2",
+    "prisma": "^5.22.0",
     "web-push": "^3.6.7",
     "ws": "^8.18.0"
-  },
-  "devDependencies": {
-    "prisma": "^5.22.0"
   }
 }

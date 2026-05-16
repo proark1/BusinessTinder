@@ -5,6 +5,6 @@
   "scripts": {
     "test": "node --test",
     "start:api": "node backend/src/server.js",
-    "start": "node backend/src/server.js"
+    "start": "node backend/src/start.js"
   }
 }

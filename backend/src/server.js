@@ -297,16 +297,20 @@ async function applyReferralPayout(newUser, code) {
   if (prisma) inviter = await prisma.user.findUnique({ where: { referralCode: code } });
   else inviter = mem.users.find((u) => u.referralCode === code);
   if (!inviter || inviter.id === newUser.id) return newUser;
-  const reward = new Date(Date.now() + 30 * 86400_000);
+  // Extend (don't shorten) any existing PRO window for the inviter.
+  const inviterCurrent = inviter.planExpiresAt ? new Date(inviter.planExpiresAt).getTime() : 0;
+  const inviterReward = new Date(Math.max(inviterCurrent, Date.now()) + 30 * 86400_000);
+  const newCurrent = newUser.planExpiresAt ? new Date(newUser.planExpiresAt).getTime() : 0;
+  const newReward = new Date(Math.max(newCurrent, Date.now()) + 30 * 86400_000);
   if (prisma) {
-    await prisma.user.update({ where: { id: inviter.id }, data: { planTier: 'PRO', planExpiresAt: reward } });
+    await prisma.user.update({ where: { id: inviter.id }, data: { planTier: 'PRO', planExpiresAt: inviterReward } });
     return prisma.user.update({
       where: { id: newUser.id },
-      data: { planTier: 'PRO', planExpiresAt: reward, referredBy: inviter.id },
+      data: { planTier: 'PRO', planExpiresAt: newReward, referredBy: inviter.id },
     });
   }
-  inviter.planTier = 'PRO'; inviter.planExpiresAt = reward.toISOString();
-  newUser.planTier = 'PRO'; newUser.planExpiresAt = reward.toISOString();
+  inviter.planTier = 'PRO'; inviter.planExpiresAt = inviterReward.toISOString();
+  newUser.planTier = 'PRO'; newUser.planExpiresAt = newReward.toISOString();
   newUser.referredBy = inviter.id;
   return newUser;
 }
@@ -1103,6 +1107,7 @@ app.delete('/me', auth, async (req, res) => {
       await prisma.conversation.deleteMany({ where: { matchId: { in: matchIds } } });
     }
     await prisma.savedProfile.deleteMany({ where: { OR: [{ userId: me }, { profileUserId: me }] } });
+    await prisma.profileView.deleteMany({ where: { OR: [{ viewerId: me }, { viewedId: me }] } });
     await prisma.report.deleteMany({ where: { OR: [{ reporterId: me }, { targetId: me }] } });
     await prisma.block.deleteMany({ where: { OR: [{ blockerId: me }, { targetId: me }] } });
     await prisma.match.deleteMany({ where: { id: { in: matchIds } } });
@@ -1197,7 +1202,7 @@ app.get('/u/:slug', async (req, res) => {
 <meta property="og:description" content="${safe(p.headline)}" />
 <meta property="og:image" content="${safe(p.photoUrl || user?.avatarUrl || '')}" />
 <meta name="twitter:card" content="summary_large_image" />
-<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
+<script type="application/ld+json">${JSON.stringify(jsonLd).replace(/</g, '\\u003c')}</script>
 </head><body><div class="app-shell"><main class="glass pad public-card center">
 <img class="public-avatar" src="${safe(p.photoUrl || user?.avatarUrl || '')}" alt="" />
 <h1>${safe(user?.fullName || '')}</h1>

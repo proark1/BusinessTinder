@@ -911,6 +911,10 @@ document.querySelectorAll(".auth-tab").forEach((btn) => {
     qs("registerForm").hidden = target !== "register";
     qs("forgotForm").hidden = true;
     qs("resetForm").hidden = true;
+    // Clear any stale error / hint from previous flows.
+    ["loginError", "registerError", "forgotError", "forgotHint", "resetError"].forEach((id) => {
+      const el = qs(id); if (!el) return; el.textContent = ""; el.hidden = true;
+    });
   });
 });
 

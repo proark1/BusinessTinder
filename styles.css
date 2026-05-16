@@ -27,6 +27,10 @@
 }
 
 * { box-sizing: border-box; }
+/* Author display rules (e.g. .form-grid, .modal, .tabbar) override the UA
+   [hidden] { display: none } unless we force this. Global so we don't have
+   to remember it per-component. */
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; }
 body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -243,7 +247,6 @@ input:focus, textarea:focus, select:focus {
 .grid-card .score { font-size: 0.72rem; color: var(--good); margin: 2px 0 0; font-weight: 700; }
 
 /* ---------- Modals ---------- */
-.modal[hidden] { display: none !important; }
 .modal { position: fixed; inset: 0; background: rgba(5, 3, 13, 0.78); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; animation: fadeIn 0.2s var(--ease-out); }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 .modal-card { max-width: 400px; width: 100%; border-radius: var(--radius-xl); animation: pop 0.28s var(--ease-out); }

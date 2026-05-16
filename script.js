@@ -902,6 +902,12 @@ qs("registerForm").addEventListener("submit", async (e) => {
     await onAuthSuccess(data.token, data.user, null);
   } catch (err) { showAuthError("registerError", err.message); }
 });
+function clearAuthFeedback() {
+  ["loginError", "registerError", "forgotError", "forgotHint", "resetError"].forEach((id) => {
+    const el = qs(id); if (!el) return; el.textContent = ""; el.hidden = true;
+  });
+}
+
 document.querySelectorAll(".auth-tab").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".auth-tab").forEach((b) => b.classList.remove("active"));
@@ -911,10 +917,7 @@ document.querySelectorAll(".auth-tab").forEach((btn) => {
     qs("registerForm").hidden = target !== "register";
     qs("forgotForm").hidden = true;
     qs("resetForm").hidden = true;
-    // Clear any stale error / hint from previous flows.
-    ["loginError", "registerError", "forgotError", "forgotHint", "resetError"].forEach((id) => {
-      const el = qs(id); if (!el) return; el.textContent = ""; el.hidden = true;
-    });
+    clearAuthFeedback();
   });
 });
 
@@ -923,10 +926,12 @@ qs("forgotLink").addEventListener("click", (e) => {
   qs("loginForm").hidden = true;
   qs("registerForm").hidden = true;
   qs("forgotForm").hidden = false;
+  clearAuthFeedback();
 });
 qs("forgotCancel").addEventListener("click", () => {
   qs("forgotForm").hidden = true;
   qs("loginForm").hidden = false;
+  clearAuthFeedback();
 });
 qs("forgotForm").addEventListener("submit", async (e) => {
   e.preventDefault();

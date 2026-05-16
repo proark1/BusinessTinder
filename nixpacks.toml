@@ -1,0 +1,15 @@
+[phases.setup]
+nixPkgs = ["nodejs_22", "openssl"]
+
+[phases.install]
+cmds = [
+  "cd backend && npm ci --no-audit --no-fund || npm install --no-audit --no-fund"
+]
+
+[phases.build]
+cmds = [
+  "cd backend && npx prisma generate"
+]
+
+[start]
+cmd = "node backend/src/start.js"

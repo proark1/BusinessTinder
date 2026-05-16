@@ -12,6 +12,7 @@ import { scoreProfile, rankProfiles, diversify } from './scoring.js';
 import { moderateText } from './moderation.js';
 import { suggestIcebreakers } from './icebreakers.js';
 import { rateLimit } from './rateLimit.js';
+import { PROMPTS, normalizePrompts, mutualHighlights } from './prompts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -83,6 +84,7 @@ const mem = {
   reports: [],
   blocks: [],
   pushSubs: [],
+  profileViews: [],
 };
 const wsClients = new Map(); // userId -> Set<WebSocket>
 
@@ -295,16 +297,20 @@ async function applyReferralPayout(newUser, code) {
   if (prisma) inviter = await prisma.user.findUnique({ where: { referralCode: code } });
   else inviter = mem.users.find((u) => u.referralCode === code);
   if (!inviter || inviter.id === newUser.id) return newUser;
-  const reward = new Date(Date.now() + 30 * 86400_000);
+  // Extend (don't shorten) any existing PRO window for the inviter.
+  const inviterCurrent = inviter.planExpiresAt ? new Date(inviter.planExpiresAt).getTime() : 0;
+  const inviterReward = new Date(Math.max(inviterCurrent, Date.now()) + 30 * 86400_000);
+  const newCurrent = newUser.planExpiresAt ? new Date(newUser.planExpiresAt).getTime() : 0;
+  const newReward = new Date(Math.max(newCurrent, Date.now()) + 30 * 86400_000);
   if (prisma) {
-    await prisma.user.update({ where: { id: inviter.id }, data: { planTier: 'PRO', planExpiresAt: reward } });
+    await prisma.user.update({ where: { id: inviter.id }, data: { planTier: 'PRO', planExpiresAt: inviterReward } });
     return prisma.user.update({
       where: { id: newUser.id },
-      data: { planTier: 'PRO', planExpiresAt: reward, referredBy: inviter.id },
+      data: { planTier: 'PRO', planExpiresAt: newReward, referredBy: inviter.id },
     });
   }
-  inviter.planTier = 'PRO'; inviter.planExpiresAt = reward.toISOString();
-  newUser.planTier = 'PRO'; newUser.planExpiresAt = reward.toISOString();
+  inviter.planTier = 'PRO'; inviter.planExpiresAt = inviterReward.toISOString();
+  newUser.planTier = 'PRO'; newUser.planExpiresAt = newReward.toISOString();
   newUser.referredBy = inviter.id;
   return newUser;
 }
@@ -459,13 +465,26 @@ app.get('/me', auth, async (req, res) => {
   if (!user) return res.status(404).json({ error: 'User not found' });
   const updated = await ensureReferralCode(user);
   const profile = await findProfileByUserId(user.id);
+  // Heartbeat: bump lastActiveAt on every /me hit (cheapest place that fires
+  // on app open + every tab focus refresh).
+  if (profile) {
+    const now = new Date();
+    const last = profile.lastActiveAt ? new Date(profile.lastActiveAt).getTime() : 0;
+    if (now.getTime() - last > 60_000) {
+      if (prisma) await prisma.profile.update({ where: { userId: user.id }, data: { lastActiveAt: now } });
+      else profile.lastActiveAt = now.toISOString();
+    }
+  }
   res.json({ user: publicUser(updated), profile: profile || null });
 });
+
+app.get('/prompts', (_req, res) => res.json({ prompts: PROMPTS }));
 
 const PROFILE_FIELDS = [
   'headline', 'userType', 'lookingFor', 'bio', 'stage', 'industries', 'skills',
   'location', 'remoteOk', 'commitment', 'linkedinUrl', 'avatarUrl', 'photoUrl',
   'photos', 'videoIntroUrl', 'pastCompanies', 'hoursPerWeek', 'calLink', 'pitchDeckUrl',
+  'promptIds', 'promptAnswers',
 ];
 function sanitizeProfile(body) {
   const out = {};
@@ -489,6 +508,18 @@ function sanitizeProfile(body) {
       const mod = moderateText(out[field]);
       if (!mod.ok) return { error: `${field} rejected: ${mod.reason}` };
     }
+  }
+  // Prompts: accept either {promptIds, promptAnswers} or {prompts: [...]} forms.
+  if (out.promptIds !== undefined || out.promptAnswers !== undefined || body.prompts !== undefined) {
+    const norm = normalizePrompts({
+      promptIds: out.promptIds, promptAnswers: out.promptAnswers, prompts: body.prompts,
+    });
+    for (const a of norm.promptAnswers) {
+      const mod = moderateText(a);
+      if (!mod.ok) return { error: `Prompt answer rejected: ${mod.reason}` };
+    }
+    out.promptIds = norm.promptIds;
+    out.promptAnswers = norm.promptAnswers;
   }
   return out;
 }
@@ -594,9 +625,59 @@ app.get('/discover', auth, async (req, res) => {
     avatarUrl: profile.photoUrl || profile.avatarUrl || profile.user?.avatarUrl,
     matchScore: score,
     matchReasons: reasons,
+    mutualHighlights: mutualHighlights(meProfile, profile),
     superLikedYou: boostSet.has(profile.userId),
   }));
   res.json(out);
+});
+
+app.post('/profile-views/:userId', auth, async (req, res) => {
+  const viewerId = req.user.userId;
+  const viewedId = req.params.userId;
+  if (!viewedId || viewedId === viewerId) return res.json({ ok: true });
+  if (await isBlocked(viewerId, viewedId)) return res.json({ ok: true });
+  if (prisma) {
+    await prisma.profileView.create({ data: { viewerId, viewedId } });
+  } else {
+    if (!mem.profileViews) mem.profileViews = [];
+    mem.profileViews.push({ id: crypto.randomUUID(), viewerId, viewedId, createdAt: new Date().toISOString() });
+  }
+  res.json({ ok: true });
+});
+
+app.get('/profile-views/incoming', auth, async (req, res) => {
+  const me = req.user.userId;
+  let recent;
+  if (prisma) {
+    recent = await prisma.profileView.findMany({
+      where: { viewedId: me, createdAt: { gt: new Date(Date.now() - 30 * 86400_000) } },
+      orderBy: { createdAt: 'desc' },
+    });
+  } else {
+    recent = (mem.profileViews || []).filter(
+      (v) => v.viewedId === me && Date.now() - new Date(v.createdAt).getTime() < 30 * 86400_000,
+    );
+  }
+  const distinct = new Map();
+  for (const v of recent) if (!distinct.has(v.viewerId)) distinct.set(v.viewerId, v);
+  const user = await findUserById(me);
+  const isPro = effectivePlanTier(user) === 'PRO';
+  if (!isPro) return res.json({ count: distinct.size, profiles: null, locked: true });
+  let profiles;
+  if (prisma) {
+    profiles = await prisma.profile.findMany({
+      where: { userId: { in: [...distinct.keys()] } },
+      include: { user: { select: { fullName: true, avatarUrl: true } } },
+    });
+  } else {
+    profiles = mem.profiles
+      .filter((p) => distinct.has(p.userId))
+      .map((p) => ({ ...p, user: { fullName: mem.users.find((u) => u.id === p.userId)?.fullName } }));
+  }
+  res.json({
+    count: distinct.size, locked: false,
+    profiles: profiles.map((p) => ({ ...p, fullName: p.user?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || p.user?.avatarUrl })),
+  });
 });
 
 app.get('/search', auth, async (req, res) => {
@@ -1026,6 +1107,7 @@ app.delete('/me', auth, async (req, res) => {
       await prisma.conversation.deleteMany({ where: { matchId: { in: matchIds } } });
     }
     await prisma.savedProfile.deleteMany({ where: { OR: [{ userId: me }, { profileUserId: me }] } });
+    await prisma.profileView.deleteMany({ where: { OR: [{ viewerId: me }, { viewedId: me }] } });
     await prisma.report.deleteMany({ where: { OR: [{ reporterId: me }, { targetId: me }] } });
     await prisma.block.deleteMany({ where: { OR: [{ blockerId: me }, { targetId: me }] } });
     await prisma.match.deleteMany({ where: { id: { in: matchIds } } });
@@ -1047,6 +1129,7 @@ app.delete('/me', auth, async (req, res) => {
     mem.reports = mem.reports.filter((r) => r.reporterId !== me && r.targetId !== me);
     mem.blocks = mem.blocks.filter((b) => b.blockerId !== me && b.targetId !== me);
     mem.pushSubs = mem.pushSubs.filter((s) => s.userId !== me);
+    mem.profileViews = (mem.profileViews || []).filter((v) => v.viewerId !== me && v.viewedId !== me);
   }
   res.json({ ok: true });
 });
@@ -1119,7 +1202,7 @@ app.get('/u/:slug', async (req, res) => {
 <meta property="og:description" content="${safe(p.headline)}" />
 <meta property="og:image" content="${safe(p.photoUrl || user?.avatarUrl || '')}" />
 <meta name="twitter:card" content="summary_large_image" />
-<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
+<script type="application/ld+json">${JSON.stringify(jsonLd).replace(/</g, '\\u003c')}</script>
 </head><body><div class="app-shell"><main class="glass pad public-card center">
 <img class="public-avatar" src="${safe(p.photoUrl || user?.avatarUrl || '')}" alt="" />
 <h1>${safe(user?.fullName || '')}</h1>

@@ -32,6 +32,8 @@ const state = {
   pendingPhotos: [],
   pendingVerifyUrl: null,
   pendingResetToken: null,
+  prompts: [],
+  pendingPrompts: [], // [{ id, answer }, ...] used during onboarding
 };
 
 // ---------- API ----------
@@ -133,6 +135,49 @@ function timeAgo(d) {
   return new Date(d).toLocaleDateString();
 }
 
+function lastActiveTier(iso) {
+  if (!iso) return null;
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 600) return { cls: "online", label: "Active now" };          // < 10 min
+  if (diff < 3600) return { cls: "recent", label: `Active ${Math.floor(diff / 60)}m ago` };
+  if (diff < 86400) return { cls: "recent", label: `Active ${Math.floor(diff / 3600)}h ago` };
+  if (diff < 7 * 86400) return { cls: "", label: `Active ${Math.floor(diff / 86400)}d ago` };
+  return null;
+}
+
+function appendLastActiveBadge(node, iso) {
+  const tier = lastActiveTier(iso);
+  if (!tier) return;
+  const span = document.createElement("span");
+  span.className = `last-active ${tier.cls}`;
+  span.textContent = tier.label;
+  node.appendChild(span);
+}
+
+// Profile completion (richer version that scores prompts + photos).
+function profileCompletionPercent(p) {
+  if (!p) return 0;
+  const checks = [
+    !!p.headline, !!p.userType, (p.lookingFor || []).length > 0, !!p.bio, !!p.stage,
+    (p.industries || []).length > 0, (p.skills || []).length > 0, !!p.location,
+    (p.photos || []).length > 0 || !!p.photoUrl,
+    (p.promptIds || []).length >= 1,
+    (p.promptIds || []).length >= 2,
+    !!p.linkedinUrl, !!p.calLink, !!p.commitment,
+  ];
+  return Math.round((checks.filter(Boolean).length / checks.length) * 100);
+}
+
+function completionTip(p) {
+  if (!p) return "Build your profile to start matching.";
+  if (!(p.photos || []).length && !p.photoUrl) return "Add a profile photo — biggest single boost to match rate.";
+  if (!(p.promptIds || []).length) return "Add a prompt — they triple message-start rate.";
+  if (!p.linkedinUrl) return "Add a LinkedIn URL for trust signal.";
+  if (!p.calLink) return "Add a Cal.com link so matches can book you.";
+  if ((p.promptIds || []).length < 3) return "Add one more prompt for a stronger profile.";
+  return "Looking great. 👍";
+}
+
 // ---------- chip sets ----------
 function readChipSet(set) {
   const max = Number(set.dataset.max || 99);
@@ -226,6 +271,33 @@ function renderCard(p, index, total) {
     span.textContent = "✓ verified";
     h2.appendChild(span);
   }
+  // Mutual highlights chips (server-supplied)
+  if (Array.isArray(p.mutualHighlights) && p.mutualHighlights.length) {
+    const row = document.createElement("div");
+    row.className = "mutual-row";
+    p.mutualHighlights.forEach((h) => {
+      const c = document.createElement("span");
+      c.className = "mutual-chip";
+      c.textContent = h.label;
+      row.appendChild(c);
+    });
+    node.querySelector(".card-content").insertBefore(row, node.querySelector(".reasons"));
+  }
+  // Last-active badge
+  appendLastActiveBadge(node.querySelector(".meta"), p.lastActiveAt);
+  // First prompt card preview (if available)
+  if (Array.isArray(p.promptIds) && p.promptIds.length) {
+    const promptCard = document.createElement("div");
+    promptCard.className = "prompt-card";
+    const q = document.createElement("div");
+    q.className = "prompt-q";
+    q.textContent = promptLabel(p.promptIds[0]);
+    const a = document.createElement("div");
+    a.className = "prompt-a";
+    a.textContent = p.promptAnswers?.[0] || "";
+    promptCard.append(q, a);
+    node.querySelector(".card-content").insertBefore(promptCard, node.querySelector(".goal"));
+  }
   return node;
 }
 
@@ -294,12 +366,24 @@ function openDetail(p) {
     const s = String(url || "");
     return /^https?:\/\//i.test(s) ? esc(s) : "#";
   };
+  const promptHtml = (p.promptIds || [])
+    .map((id, i) => p.promptAnswers?.[i]
+      ? `<div class="prompt-card"><div class="prompt-q">${esc(promptLabel(id))}</div><div class="prompt-a">${esc(p.promptAnswers[i])}</div></div>`
+      : ""
+    ).join("");
+  const mutualHtml = (p.mutualHighlights || []).length
+    ? `<div class="mutual-row">${p.mutualHighlights.map((h) => `<span class="mutual-chip">${esc(h.label)}</span>`).join("")}</div>`
+    : "";
+  const lastTier = lastActiveTier(p.lastActiveAt);
+  const lastHtml = lastTier ? `<span class="last-active ${lastTier.cls}">${esc(lastTier.label)}</span>` : "";
   qs("detailBody").innerHTML = `
-    <h2>${esc(p.fullName || "")}</h2>
+    <h2>${esc(p.fullName || "")}${p.verified ? ` <span class="verified-pill">✓ verified</span>` : ""}</h2>
     <p class="role">${esc(p.headline || "")}</p>
-    <p class="meta">${esc(describeUserType(p.userType))} · ${esc(describeStage(p.stage))} · ${esc(p.location || "")}${p.remoteOk ? " · Remote OK" : ""}</p>
+    <p class="meta">${esc(describeUserType(p.userType))} · ${esc(describeStage(p.stage))} · ${esc(p.location || "")}${p.remoteOk ? " · Remote OK" : ""} ${lastHtml}</p>
+    ${mutualHtml}
     ${typeof p.matchScore === "number" ? `<p class="reasons-row">${p.matchScore}% match${p.matchReasons?.length ? " · " + esc(p.matchReasons.join(" · ")) : ""}</p>` : ""}
     <p>${esc(p.bio || "")}</p>
+    ${promptHtml}
     ${p.lookingFor?.length ? `<div class="section"><h3>Looking for</h3><ul class="tags">${tagList(p.lookingFor)}</ul></div>` : ""}
     ${p.industries?.length ? `<div class="section"><h3>Industries</h3><ul class="tags">${tagList(p.industries)}</ul></div>` : ""}
     ${p.skills?.length ? `<div class="section"><h3>What they bring</h3><ul class="tags">${tagList(p.skills)}</ul></div>` : ""}
@@ -317,6 +401,8 @@ function openDetail(p) {
   qs("detailPassBtn").onclick = () => { closeModal(qs("detailModal")); onSwipe("left", p); };
   qs("detailLikeBtn").onclick = () => { closeModal(qs("detailModal")); onSwipe("right", p); };
   qs("detailSuperBtn").onclick = () => { closeModal(qs("detailModal")); onSwipe("super", p); };
+  // Fire-and-forget view log.
+  if (p.userId) api(`/profile-views/${p.userId}`, { method: "POST" }).catch(() => {});
 }
 qs("detailCloseBtn").addEventListener("click", () => closeModal(qs("detailModal")));
 
@@ -349,6 +435,39 @@ async function loadMatches() {
 
 async function loadSaved() {
   try { state.saved = await api("/saved"); renderSaved(); } catch {}
+}
+
+async function loadViewedYou() {
+  try {
+    const data = await api("/profile-views/incoming");
+    qs("viewsCount").textContent = data.count ? ` · ${data.count}` : "";
+    const box = qs("viewsBox");
+    if (!box) return;
+    box.innerHTML = "";
+    if (data.locked) {
+      box.innerHTML = `<div class="liked-locked">
+        <div class="big">${data.count}</div>
+        <p>${data.count === 1 ? "person" : "people"} viewed your profile</p>
+        <button class="primary" id="seeViewsBtn" type="button">Upgrade to Pro to see who</button>
+      </div>`;
+      qs("seeViewsBtn")?.addEventListener("click", () => openModal(qs("proModal")));
+      return;
+    }
+    if (!data.profiles?.length) {
+      box.innerHTML = `<div class="empty"><div class="empty-icon">👀</div><p>No one viewed you in the last 30 days yet.</p></div>`;
+      return;
+    }
+    data.profiles.forEach((p) => {
+      const div = document.createElement("div");
+      div.className = "liked-row";
+      div.innerHTML = `<img alt="" /><div><strong></strong><br/><small style="color:var(--text-2)"></small></div>`;
+      div.querySelector("img").src = avatarFor(p);
+      div.querySelector("strong").textContent = p.fullName || "";
+      div.querySelector("small").textContent = p.headline || "";
+      div.addEventListener("click", () => openDetail(p));
+      box.appendChild(div);
+    });
+  } catch {}
 }
 
 async function loadLikedYou() {
@@ -408,6 +527,7 @@ function renderMatches() {
       avatarUrl: other.avatarUrl, fullName: other.fullName,
     });
     li.querySelector(".match-name").textContent = other.fullName || "";
+    appendLastActiveBadge(li.querySelector(".match-name"), other.profile?.lastActiveAt);
     const preview = m.lastMessage?.body
       ? (m.lastMessage.senderId === state.user.id ? "You: " : "") + m.lastMessage.body
       : (other.profile?.headline || "Say hi 👋");
@@ -540,13 +660,28 @@ function fling(direction) {
 }
 function enableSwipe(card, profile) {
   card._profile = profile;
-  let startX = 0, dx = 0, dragging = false;
-  card.addEventListener("pointerdown", (e) => { dragging = true; startX = e.clientX || 0; card.setPointerCapture?.(e.pointerId); });
+  let startX = 0, startY = 0, dx = 0, dy = 0, dragging = false;
+  card.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    startX = e.clientX || 0;
+    startY = e.clientY || 0;
+    card.setPointerCapture?.(e.pointerId);
+  });
   card.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     dx = (e.clientX || 0) - startX;
-    card.style.transform = `translateX(${dx}px) rotate(${dx * 0.06}deg)`;
+    dy = (e.clientY || 0) - startY;
     const badge = card.querySelector(".badge");
+    if (dy < -40 && Math.abs(dy) > Math.abs(dx)) {
+      // Upward swipe → super-like cue
+      card.style.transform = `translateY(${dy}px) scale(${Math.max(0.85, 1 + dy / 1200)})`;
+      card.classList.remove("like", "pass");
+      card.classList.add("superlike");
+      badge.textContent = "SUPER";
+      return;
+    }
+    card.classList.remove("superlike");
+    card.style.transform = `translateX(${dx}px) rotate(${dx * 0.06}deg)`;
     if (dx > 35) { card.classList.add("like"); card.classList.remove("pass"); badge.textContent = "LIKE"; }
     else if (dx < -35) { card.classList.add("pass"); card.classList.remove("like"); badge.textContent = "PASS"; }
     else { card.classList.remove("like", "pass"); badge.textContent = ""; }
@@ -554,9 +689,10 @@ function enableSwipe(card, profile) {
   const up = (e) => {
     if (!dragging) return; dragging = false;
     try { card.releasePointerCapture?.(e?.pointerId); } catch {}
+    if (dy < -120 && Math.abs(dy) > Math.abs(dx)) return fling("super");
     if (dx > 120) return fling("right");
     if (dx < -120) return fling("left");
-    card.style.transform = "translateX(0)"; card.classList.remove("like", "pass");
+    card.style.transform = "translateX(0)"; card.classList.remove("like", "pass", "superlike");
   };
   card.addEventListener("pointerup", up);
   card.addEventListener("pointercancel", up);
@@ -638,6 +774,7 @@ function gatherProfilePayload() {
     industries: readChipSet(document.querySelector('.chip-set[data-name="industries"]')),
     skills: readChipSet(document.querySelector('.chip-set[data-name="skills"]')),
     photos: state.pendingPhotos.length ? state.pendingPhotos : (state.profile?.photos || []),
+    prompts: state.pendingPrompts.filter((p) => p.id && p.answer?.trim()),
   };
 }
 function renderPreviewCard() {
@@ -725,6 +862,8 @@ function fillOnboardingForm(profile) {
   });
   state.pendingPhotos = profile.photos?.length ? [...profile.photos] : (profile.photoUrl ? [profile.photoUrl] : []);
   renderPhotoGallery();
+  state.pendingPrompts = (profile.promptIds || []).map((id, i) => ({ id, answer: profile.promptAnswers?.[i] || "" }));
+  renderPromptsEditor();
 }
 
 qs("onboardingForm").addEventListener("submit", async (e) => {
@@ -734,7 +873,7 @@ qs("onboardingForm").addEventListener("submit", async (e) => {
     const payload = gatherProfilePayload();
     state.profile = await api("/profiles", { method: "POST", body: JSON.stringify(payload) });
     show("swipe");
-    await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou()]);
+    await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou(), loadViewedYou()]);
   } catch (err) {
     showAuthError("onboardingError", err.message);
   }
@@ -841,7 +980,7 @@ async function onAuthSuccess(token, user, profile) {
   connectWebSocket();
   if (state.profile) {
     show("swipe");
-    await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou()]);
+    await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou(), loadViewedYou()]);
   } else {
     showWizardStep(1);
     show("onboarding");
@@ -870,6 +1009,14 @@ function updateChrome() {
     qs("publicProfileLink").href = link;
     qs("publicProfileLink").textContent = link;
   }
+  // Completion ring + tip
+  const pct = profileCompletionPercent(state.profile);
+  const ring = qs("completionRing");
+  if (ring) {
+    ring.style.setProperty("--p", String(pct));
+    qs("completionPct").textContent = `${pct}%`;
+    qs("completionTip").textContent = completionTip(state.profile);
+  }
   // Verify banner
   const banner = qs("verifyBanner");
   if (state.user && !state.user.emailVerified) {
@@ -888,6 +1035,59 @@ function updateChrome() {
 }
 
 // ---------- Google ----------
+async function fetchPrompts() {
+  try {
+    const r = await fetch(`${API_BASE}/prompts`).then((r) => r.json());
+    state.prompts = r.prompts || [];
+  } catch { state.prompts = []; }
+}
+
+function promptLabel(id) {
+  return state.prompts.find((p) => p.id === id)?.label || id;
+}
+
+function renderPromptsEditor() {
+  const list = qs("promptsList");
+  if (!list) return;
+  list.innerHTML = "";
+  state.pendingPrompts.forEach((entry, i) => {
+    const row = document.createElement("div");
+    row.className = "prompt-row";
+    const select = document.createElement("select");
+    select.innerHTML = `<option value="">Pick a prompt…</option>` + state.prompts.map((p) =>
+      `<option value="${p.id}" ${p.id === entry.id ? "selected" : ""}>${p.label}</option>`
+    ).join("");
+    select.addEventListener("change", (e) => {
+      state.pendingPrompts[i].id = e.target.value;
+    });
+    const ta = document.createElement("textarea");
+    ta.maxLength = 240;
+    ta.placeholder = "Your answer (240 char max)…";
+    ta.value = entry.answer || "";
+    ta.addEventListener("input", () => { state.pendingPrompts[i].answer = ta.value; });
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "prompt-rm";
+    rm.textContent = "Remove";
+    rm.addEventListener("click", () => {
+      state.pendingPrompts.splice(i, 1);
+      renderPromptsEditor();
+    });
+    row.append(select, ta, rm);
+    list.appendChild(row);
+  });
+  qs("addPromptBtn").disabled = state.pendingPrompts.length >= 3;
+  qs("addPromptBtn").textContent = state.pendingPrompts.length >= 3
+    ? "Maximum 3 prompts"
+    : "+ Add a prompt";
+}
+document.addEventListener("click", (e) => {
+  if (e.target?.id !== "addPromptBtn") return;
+  if (state.pendingPrompts.length >= 3) return;
+  state.pendingPrompts.push({ id: "", answer: "" });
+  renderPromptsEditor();
+});
+
 async function setupGoogle() {
   try { state.config = await fetch(`${API_BASE}/auth/config`).then((r) => r.json()); } catch {}
   if (!state.config.googleClientId) { qs("googleDisabledNote").hidden = false; return; }
@@ -979,6 +1179,18 @@ async function openChat(matchId) {
   try {
     messages = await api(`/messages/${match.conversation.id}`);
     messages.forEach(appendMessage);
+    // Read receipt: under the latest of my messages that the other side has READ.
+    const mine = messages.filter((m) => m.senderId === state.user.id);
+    const lastRead = mine.reverse().find((m) => m.status === "READ");
+    if (lastRead) {
+      const node = box.lastElementChild;
+      if (node?.classList.contains("me")) {
+        const r = document.createElement("span");
+        r.className = "read-receipt";
+        r.textContent = `Read · ${timeAgo(lastRead.createdAt)}`;
+        node.appendChild(r);
+      }
+    }
   } catch {}
   try {
     const ice = await api(`/icebreakers?userId=${match.other.id}`);
@@ -1129,7 +1341,7 @@ qs("searchInput").addEventListener("input", (e) => {
 document.querySelectorAll(".tab").forEach((btn) =>
   btn.addEventListener("click", () => {
     show(btn.dataset.view);
-    if (btn.dataset.view === "matches") { loadMatches(); loadSaved(); loadLikedYou(); }
+    if (btn.dataset.view === "matches") { loadMatches(); loadSaved(); loadLikedYou(); loadViewedYou(); }
   }),
 );
 
@@ -1245,10 +1457,57 @@ qs("installAppBtn").addEventListener("click", async () => {
 });
 
 // ---------- boot ----------
+function setupPullToRefresh() {
+  // Mount a single indicator at the top of <main>.
+  const main = document.querySelector("main");
+  if (!main) return;
+  let indicator = document.getElementById("refreshIndicator");
+  if (!indicator) {
+    indicator = document.createElement("div");
+    indicator.id = "refreshIndicator";
+    indicator.className = "refresh-indicator";
+    indicator.textContent = "Pull to refresh";
+    main.prepend(indicator);
+  }
+  let startY = 0, pulling = false, ready = false;
+  main.addEventListener("touchstart", (e) => {
+    if (window.scrollY > 4) return;
+    startY = e.touches[0].clientY;
+    pulling = true;
+  }, { passive: true });
+  main.addEventListener("touchmove", (e) => {
+    if (!pulling) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy > 12) {
+      indicator.classList.add("pulling");
+      indicator.textContent = dy > 70 ? "Release to refresh" : "Pull to refresh";
+      ready = dy > 70;
+    }
+  }, { passive: true });
+  main.addEventListener("touchend", async () => {
+    if (!pulling) return;
+    pulling = false;
+    if (ready) {
+      indicator.classList.remove("pulling");
+      indicator.classList.add("refreshing");
+      indicator.textContent = "Refreshing…";
+      const view = document.querySelector(".view.active")?.id;
+      if (view === "view-swipe") await loadDiscover();
+      else if (view === "view-matches") { await Promise.all([loadMatches(), loadSaved(), loadLikedYou(), loadViewedYou()]); }
+      indicator.classList.remove("refreshing");
+      indicator.textContent = "Pull to refresh";
+    } else {
+      indicator.classList.remove("pulling");
+    }
+    ready = false;
+  });
+}
+
 async function boot() {
   enforceChipMax();
   ["matchModal", "proModal", "detailModal"].forEach((id) => wireModal(qs(id)));
-  await setupGoogle();
+  setupPullToRefresh();
+  await Promise.all([setupGoogle(), fetchPrompts()]);
   if (state.token) {
     try {
       const me = await fetchMeWithToken(state.token);

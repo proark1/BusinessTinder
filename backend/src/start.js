@@ -13,8 +13,9 @@ async function runMigrate() {
     console.log('[start] No DATABASE_URL — skipping prisma migrate deploy.');
     return;
   }
+  const isProd = process.env.NODE_ENV === 'production';
   console.log('[start] Running prisma migrate deploy…');
-  await new Promise((resolve) => {
+  await new Promise((resolve, reject) => {
     const proc = spawn('npx', ['prisma', 'migrate', 'deploy'], {
       cwd: path.resolve(here, '..'),
       stdio: 'inherit',
@@ -22,16 +23,31 @@ async function runMigrate() {
     });
     proc.on('exit', (code) => {
       if (code !== 0) {
-        console.warn(`[start] prisma migrate deploy exited with code ${code} — continuing anyway.`);
+        const msg = `[start] prisma migrate deploy exited with code ${code}.`;
+        if (isProd) {
+          console.error(`${msg} Refusing to start with a possibly-incompatible schema.`);
+          return reject(new Error(`migrate deploy failed (${code})`));
+        }
+        console.warn(`${msg} (dev mode — continuing so you can iterate on the schema.)`);
       }
       resolve();
     });
     proc.on('error', (err) => {
-      console.warn(`[start] failed to spawn prisma: ${err.message} — continuing anyway.`);
+      const msg = `[start] failed to spawn prisma: ${err.message}.`;
+      if (isProd) {
+        console.error(`${msg} Refusing to start.`);
+        return reject(err);
+      }
+      console.warn(`${msg} (dev mode — continuing.)`);
       resolve();
     });
   });
 }
 
-await runMigrate();
-await import('./server.js');
+try {
+  await runMigrate();
+  await import('./server.js');
+} catch (err) {
+  console.error('[start] fatal:', err?.message || err);
+  process.exit(1);
+}

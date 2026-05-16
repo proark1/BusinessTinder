@@ -30,18 +30,20 @@ app.use(cors());
 app.use(express.json({ limit: '4mb' })); // big enough for a small photo dataURL
 
 // Express 4 doesn't forward async-handler rejections to error middleware.
-// Wrap every route registration so a thrown / rejected promise becomes
-// next(err) instead of a hung request → mystery 404 from upstream proxies.
-for (const verb of ['get', 'post', 'put', 'delete', 'patch']) {
+// Wrap every route + middleware registration so a thrown / rejected promise
+// becomes next(err) instead of a hung request → mystery 404 from upstream
+// proxies. Recurses into handler arrays (Express supports those) and skips
+// 4-arg error middlewares so they keep their (err, req, res, next) signature.
+const wrapHandler = (h) => {
+  if (Array.isArray(h)) return h.map(wrapHandler);
+  if (typeof h === 'function' && h.length <= 3) {
+    return (req, res, next) => Promise.resolve(h(req, res, next)).catch(next);
+  }
+  return h;
+};
+for (const verb of ['get', 'post', 'put', 'delete', 'patch', 'use', 'all']) {
   const orig = app[verb].bind(app);
-  app[verb] = (routePath, ...handlers) => orig(
-    routePath,
-    ...handlers.map((h) =>
-      typeof h === 'function' && h.length <= 3
-        ? (req, res, next) => Promise.resolve(h(req, res, next)).catch(next)
-        : h,
-    ),
-  );
+  app[verb] = (...args) => orig(...args.map(wrapHandler));
 }
 
 const limits = {
@@ -1301,14 +1303,16 @@ app.use((err, req, res, _next) => {
   });
 });
 
-// Last-ditch safety net: if a handler awaits a promise that rejects, Express
-// 4 doesn't forward it to the error middleware automatically. Surface it as
-// a server log instead of crashing the process.
+// Last-ditch safety net. unhandledRejection is logged but tolerated (we want
+// the server to keep serving other requests). uncaughtException leaves the
+// process in an undefined state — log and exit so the orchestrator restarts
+// us cleanly.
 process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
 });
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err);
+  process.exit(1);
 });
 
 const server = createServer(app);

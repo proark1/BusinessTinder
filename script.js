@@ -902,15 +902,53 @@ qs("registerForm").addEventListener("submit", async (e) => {
     await onAuthSuccess(data.token, data.user, null);
   } catch (err) { showAuthError("registerError", err.message); }
 });
+function clearAuthFeedback() {
+  ["loginError", "registerError", "forgotError", "forgotHint", "resetError"].forEach((id) => {
+    const el = qs(id); if (!el) return; el.textContent = ""; el.hidden = true;
+  });
+}
+
+const AUTH_COPY = {
+  login: { title: "Welcome back", subtitle: "Sign in to keep matching with founders, operators & investors." },
+  register: { title: "Get started", subtitle: "Build your network in 60 seconds — co-founders, investors, first hires." },
+  forgot: { title: "Reset password", subtitle: "We'll email you a link to set a new password." },
+  reset: { title: "Pick a new password", subtitle: "Last step — choose something memorable." },
+};
+function setAuthMode(mode) {
+  const copy = AUTH_COPY[mode] || AUTH_COPY.login;
+  qs("authTitle").textContent = copy.title;
+  qs("authSubtitle").textContent = copy.subtitle;
+  // Sync the pill thumb position so it animates left/right.
+  const pill = document.querySelector(".auth-pill");
+  if (pill) pill.dataset.mode = mode === "register" ? "register" : "login";
+  document.querySelectorAll(".auth-tab").forEach((b) => {
+    const isActive = b.dataset.authTab === mode;
+    b.classList.toggle("active", isActive);
+    b.setAttribute("aria-selected", String(isActive));
+  });
+}
+
 document.querySelectorAll(".auth-tab").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".auth-tab").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
     const target = btn.dataset.authTab;
     qs("loginForm").hidden = target !== "login";
     qs("registerForm").hidden = target !== "register";
     qs("forgotForm").hidden = true;
     qs("resetForm").hidden = true;
+    setAuthMode(target);
+    clearAuthFeedback();
+  });
+});
+
+// Password show/hide toggles on every .pwd-toggle button.
+document.querySelectorAll(".pwd-toggle").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const input = btn.parentElement.querySelector("input");
+    if (!input) return;
+    const showing = input.type === "text";
+    input.type = showing ? "password" : "text";
+    btn.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+    btn.textContent = showing ? "👁" : "🙈";
   });
 });
 
@@ -919,10 +957,14 @@ qs("forgotLink").addEventListener("click", (e) => {
   qs("loginForm").hidden = true;
   qs("registerForm").hidden = true;
   qs("forgotForm").hidden = false;
+  setAuthMode("forgot");
+  clearAuthFeedback();
 });
 qs("forgotCancel").addEventListener("click", () => {
   qs("forgotForm").hidden = true;
   qs("loginForm").hidden = false;
+  setAuthMode("login");
+  clearAuthFeedback();
 });
 qs("forgotForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -962,6 +1004,7 @@ qs("resetForm").addEventListener("submit", async (e) => {
     qs("loginForm").hidden = true;
     qs("registerForm").hidden = true;
     qs("resetForm").hidden = false;
+    setAuthMode("reset");
   }
 })();
 async function fetchMeWithToken(token) {

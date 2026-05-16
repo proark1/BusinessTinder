@@ -27,6 +27,10 @@
 }
 
 * { box-sizing: border-box; }
+/* Author display rules (e.g. .form-grid, .modal, .tabbar) override the UA
+   [hidden] { display: none } unless we force this. Global so we don't have
+   to remember it per-component. */
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; }
 body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -119,12 +123,82 @@ input:focus, textarea:focus, select:focus {
 }
 .ghost:hover { background: rgba(255, 255, 255, 0.08); }
 
-/* ---------- Auth ---------- */
-.google-wrap { margin: 14px 0; display: flex; justify-content: center; min-height: 44px; }
-.auth-tabs { display: flex; gap: 6px; margin: 18px 0 12px; padding: 4px; background: rgba(10, 6, 19, 0.5); border-radius: 12px; border: 1px solid var(--border); }
-.auth-tab { flex: 1; background: transparent; color: var(--text-2); border: 0; border-radius: 9px; padding: 9px; font-weight: 600; transition: 0.18s; }
-.auth-tab.active { background: var(--grad); color: white; box-shadow: var(--shadow-pop); }
+/* ---------- Auth (modern, minimal) ---------- */
+.auth-screen { padding: 22px 20px 24px; }
+.auth-hero { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+.auth-logo { filter: drop-shadow(0 8px 22px rgba(124, 92, 255, 0.5)); }
+.auth-brand { font-size: 1.02rem; font-weight: 800; letter-spacing: -0.01em; }
+
+.auth-title { font-size: 1.85rem; font-weight: 800; letter-spacing: -0.025em; line-height: 1.1; margin: 0 0 6px; }
+.auth-subtitle { color: var(--text-2); font-size: 0.95rem; line-height: 1.45; margin: 0 0 18px; }
+
+.google-wrap { margin: 0 0 12px; display: flex; justify-content: center; min-height: 44px; }
+
+.or-divider {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.12em;
+  margin: 4px 0 14px;
+}
+.or-divider::before, .or-divider::after { content: ""; flex: 1; height: 1px; background: var(--border-strong); }
+.or-divider span { white-space: nowrap; }
+
+/* Segmented control "pill" with a moving thumb */
+.auth-pill {
+  position: relative; display: grid; grid-template-columns: 1fr 1fr;
+  background: rgba(10, 6, 19, 0.55); border: 1px solid var(--border-strong);
+  border-radius: 999px; padding: 4px; margin: 0 0 16px;
+}
+.auth-pill .auth-tab {
+  position: relative; z-index: 1;
+  background: transparent; color: var(--text-2); border: 0;
+  padding: 9px 14px; font-weight: 700; font-size: 0.92rem;
+  border-radius: 999px; transition: color 0.18s ease;
+}
+.auth-pill .auth-tab.active { color: white; }
+.auth-pill-thumb {
+  position: absolute; inset: 4px auto 4px 4px; width: calc(50% - 4px);
+  background: var(--grad); border-radius: 999px;
+  box-shadow: var(--shadow-pop);
+  transition: transform 0.25s var(--ease-out);
+}
+.auth-pill[data-mode="register"] .auth-pill-thumb { transform: translateX(100%); }
+
+/* Forms */
+.auth-form { gap: 14px; animation: fade-in 0.28s var(--ease-out); }
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.field { display: grid; gap: 6px; }
+.field-label { color: var(--text-2); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
+.field-optional { text-transform: none; color: var(--muted); font-weight: 500; letter-spacing: 0; }
+.field input,
+.field textarea,
+.field select { padding: 12px 14px; font-size: 0.96rem; }
+
+.pwd-wrap { position: relative; display: block; }
+.pwd-wrap input { padding-right: 44px; width: 100%; }
+.pwd-toggle {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: transparent; color: var(--muted); border: 0; padding: 6px 8px;
+  font-size: 1rem; border-radius: 8px;
+}
+.pwd-toggle:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+
+.primary.big { padding: 14px 16px; font-size: 1rem; font-weight: 700; letter-spacing: 0.01em; }
+
+.auth-link { margin: 0; font-size: 0.86rem; }
+.auth-link a { color: var(--text-2); text-decoration: none; border-bottom: 1px dashed var(--border-strong); padding-bottom: 1px; }
+.auth-link a:hover { color: var(--text); border-color: var(--brand-1); }
+
 .auth-error { color: var(--bad); font-size: 0.86rem; margin: 4px 0 0; }
+.hint.tiny { font-size: 0.74rem; color: var(--muted); margin: -4px 0 0; }
+
+/* Value bullets at the bottom */
+.value-bullets {
+  list-style: none; padding: 14px 16px; margin: 20px 0 0;
+  background: rgba(124, 92, 255, 0.06); border: 1px solid var(--border);
+  border-radius: 14px; display: grid; gap: 8px;
+}
+.value-bullets li { display: flex; gap: 10px; align-items: flex-start; font-size: 0.86rem; color: var(--text-2); }
+.value-bullets .pro-check { color: var(--good); font-weight: 800; flex-shrink: 0; }
 
 /* ---------- Wizard ---------- */
 .wizard-progress { display: flex; gap: 6px; margin-bottom: 14px; }
@@ -243,7 +317,6 @@ input:focus, textarea:focus, select:focus {
 .grid-card .score { font-size: 0.72rem; color: var(--good); margin: 2px 0 0; font-weight: 700; }
 
 /* ---------- Modals ---------- */
-.modal[hidden] { display: none !important; }
 .modal { position: fixed; inset: 0; background: rgba(5, 3, 13, 0.78); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; animation: fadeIn 0.2s var(--ease-out); }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 .modal-card { max-width: 400px; width: 100%; border-radius: var(--radius-xl); animation: pop 0.28s var(--ease-out); }

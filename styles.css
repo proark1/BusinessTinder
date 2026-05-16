@@ -418,12 +418,14 @@ input:focus, textarea:focus, select:focus {
 
 .chip-limit-msg { color: var(--warn); font-size: .76rem; margin-top: -6px; }
 
-.landing-hero { padding: 6px 0 14px; }
-.landing-logo { filter: drop-shadow(0 12px 32px rgba(124, 92, 255, 0.55)); }
-.landing-headline { font-size: 1.6rem; font-weight: 800; line-height: 1.15; margin: 14px 0 6px; letter-spacing: -0.02em; }
-.landing-sub { color: var(--text-2); font-size: 0.95rem; line-height: 1.45; margin: 6px 14px; }
-.landing-bullets { list-style: none; padding: 14px 16px; margin: 14px 0 6px; text-align: left; background: rgba(124, 92, 255, 0.08); border: 1px solid var(--border-strong); border-radius: 14px; display: grid; gap: 6px; }
-.landing-bullets li { display: flex; gap: 8px; font-size: 0.88rem; color: var(--text); }
+.landing-hero { padding: 2px 0 10px; }
+.landing-hero.compact { padding: 0 0 8px; }
+.landing-logo { filter: drop-shadow(0 10px 28px rgba(124, 92, 255, 0.5)); }
+.landing-headline { font-size: 1.5rem; font-weight: 800; line-height: 1.15; margin: 10px 0 4px; letter-spacing: -0.02em; }
+.landing-hero.compact .landing-headline { font-size: 1.35rem; margin: 8px 0 2px; }
+.landing-sub { color: var(--text-2); font-size: 0.9rem; line-height: 1.4; margin: 4px 8px 0; }
+.landing-bullets { list-style: none; padding: 12px 14px; margin: 0; text-align: left; background: rgba(124, 92, 255, 0.06); border: 1px solid var(--border-strong); border-radius: 14px; display: grid; gap: 6px; }
+.landing-bullets li { display: flex; gap: 8px; font-size: 0.86rem; color: var(--text-2); }
 
 .prompts-editor { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border-strong); border-radius: 14px; background: rgba(10, 6, 19, 0.45); }
 .prompt-row { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255, 255, 255, 0.02); }

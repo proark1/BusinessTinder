@@ -631,10 +631,12 @@ app.get('/discover', auth, async (req, res) => {
   res.json(out);
 });
 
-app.post('/profile-views/:userId', auth, async (req, res) => {
+app.post('/profile-views/:userId', auth, limits.general, async (req, res) => {
   const viewerId = req.user.userId;
   const viewedId = req.params.userId;
   if (!viewedId || viewedId === viewerId) return res.json({ ok: true });
+  const target = await findUserById(viewedId);
+  if (!target) return res.json({ ok: true }); // silently no-op, don't leak existence
   if (await isBlocked(viewerId, viewedId)) return res.json({ ok: true });
   if (prisma) {
     await prisma.profileView.create({ data: { viewerId, viewedId } });
@@ -647,36 +649,67 @@ app.post('/profile-views/:userId', auth, async (req, res) => {
 
 app.get('/profile-views/incoming', auth, async (req, res) => {
   const me = req.user.userId;
-  let recent;
-  if (prisma) {
-    recent = await prisma.profileView.findMany({
-      where: { viewedId: me, createdAt: { gt: new Date(Date.now() - 30 * 86400_000) } },
-      orderBy: { createdAt: 'desc' },
-    });
-  } else {
-    recent = (mem.profileViews || []).filter(
-      (v) => v.viewedId === me && Date.now() - new Date(v.createdAt).getTime() < 30 * 86400_000,
-    );
-  }
-  const distinct = new Map();
-  for (const v of recent) if (!distinct.has(v.viewerId)) distinct.set(v.viewerId, v);
   const user = await findUserById(me);
   const isPro = effectivePlanTier(user) === 'PRO';
-  if (!isPro) return res.json({ count: distinct.size, profiles: null, locked: true });
+  const cutoff = new Date(Date.now() - 30 * 86400_000);
+
+  // Count first — for FREE this is the only thing we need to return.
+  let count;
+  if (prisma) {
+    const groups = await prisma.profileView.groupBy({
+      by: ['viewerId'],
+      where: { viewedId: me, createdAt: { gt: cutoff } },
+    });
+    count = groups.length;
+  } else {
+    const distinct = new Set();
+    for (const v of (mem.profileViews || [])) {
+      if (v.viewedId === me && new Date(v.createdAt) > cutoff) distinct.add(v.viewerId);
+    }
+    count = distinct.size;
+  }
+
+  if (!isPro) return res.json({ count, profiles: null, locked: true });
+
+  // PRO: paginate (default 25, max 100).
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 25));
+  let viewerIds;
+  if (prisma) {
+    // Distinct viewer IDs ordered by most recent view.
+    const rows = await prisma.$queryRaw`
+      SELECT DISTINCT ON ("viewerId") "viewerId", "createdAt"
+      FROM "ProfileView"
+      WHERE "viewedId" = ${me} AND "createdAt" > ${cutoff}
+      ORDER BY "viewerId", "createdAt" DESC
+    `;
+    viewerIds = rows.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, limit).map((r) => r.viewerId);
+  } else {
+    const seen = new Map();
+    for (const v of (mem.profileViews || [])) {
+      if (v.viewedId !== me || new Date(v.createdAt) <= cutoff) continue;
+      const prev = seen.get(v.viewerId);
+      if (!prev || new Date(v.createdAt) > new Date(prev)) seen.set(v.viewerId, v.createdAt);
+    }
+    viewerIds = [...seen.entries()].sort((a, b) => new Date(b[1]) - new Date(a[1])).slice(0, limit).map(([id]) => id);
+  }
+
   let profiles;
   if (prisma) {
     profiles = await prisma.profile.findMany({
-      where: { userId: { in: [...distinct.keys()] } },
+      where: { userId: { in: viewerIds } },
       include: { user: { select: { fullName: true, avatarUrl: true } } },
     });
   } else {
     profiles = mem.profiles
-      .filter((p) => distinct.has(p.userId))
+      .filter((p) => viewerIds.includes(p.userId))
       .map((p) => ({ ...p, user: { fullName: mem.users.find((u) => u.id === p.userId)?.fullName } }));
   }
+  // Preserve the recency order.
+  const byId = new Map(profiles.map((p) => [p.userId, p]));
+  const ordered = viewerIds.map((id) => byId.get(id)).filter(Boolean);
   res.json({
-    count: distinct.size, locked: false,
-    profiles: profiles.map((p) => ({ ...p, fullName: p.user?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || p.user?.avatarUrl })),
+    count, locked: false, limit,
+    profiles: ordered.map((p) => ({ ...p, fullName: p.user?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || p.user?.avatarUrl })),
   });
 });
 

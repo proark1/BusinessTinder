@@ -29,6 +29,23 @@ app.set('trust proxy', 1); // honor X-Forwarded-For for rate limiting behind a p
 app.use(cors());
 app.use(express.json({ limit: '4mb' })); // big enough for a small photo dataURL
 
+// Express 4 doesn't forward async-handler rejections to error middleware.
+// Wrap every route + middleware registration so a thrown / rejected promise
+// becomes next(err) instead of a hung request → mystery 404 from upstream
+// proxies. Recurses into handler arrays (Express supports those) and skips
+// 4-arg error middlewares so they keep their (err, req, res, next) signature.
+const wrapHandler = (h) => {
+  if (Array.isArray(h)) return h.map(wrapHandler);
+  if (typeof h === 'function' && h.length <= 3) {
+    return (req, res, next) => Promise.resolve(h(req, res, next)).catch(next);
+  }
+  return h;
+};
+for (const verb of ['get', 'post', 'put', 'delete', 'patch', 'use', 'all']) {
+  const orig = app[verb].bind(app);
+  app[verb] = (...args) => orig(...args.map(wrapHandler));
+}
+
 const limits = {
   authStrict: rateLimit({ key: 'auth-strict', limit: 8, windowMs: 60_000 }),       // login/register/forgot/reset/google
   swipe: rateLimit({ key: 'swipe', limit: 60, windowMs: 60_000 }),
@@ -1265,6 +1282,38 @@ app.use(express.static(STATIC_ROOT, {
     if (STATIC_MIME[ext]) res.setHeader('Content-Type', STATIC_MIME[ext]);
   },
 }));
+
+// Final JSON 404 for any /api-shaped request that didn't match a route or a
+// static file. Without this, unmatched POSTs return Express's text 404
+// ("Cannot POST /...") which the client can't usefully parse.
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  res.status(404).json({ error: `No route for ${req.method} ${req.path}` });
+});
+
+// JSON error handler. Must be the last middleware. Catches both sync throws
+// and async rejections from the route handlers (Express 4 only forwards
+// rejections to here when the route awaits with an explicit `next(err)`,
+// but we also wire process-level catchers below for safety).
+app.use((err, req, res, _next) => {
+  console.error('[error]', req.method, req.path, '—', err?.stack || err);
+  if (res.headersSent) return;
+  res.status(err.status || 500).json({
+    error: err.publicMessage || err.message || 'Server error',
+  });
+});
+
+// Last-ditch safety net. unhandledRejection is logged but tolerated (we want
+// the server to keep serving other requests). uncaughtException leaves the
+// process in an undefined state — log and exit so the orchestrator restarts
+// us cleanly.
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  process.exit(1);
+});
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });

@@ -40,11 +40,22 @@ const state = {
 async function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
-  const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
+  } catch (netErr) {
+    const e = new Error(`Network error — check your connection. (${netErr.message})`);
+    e.status = 0;
+    throw e;
+  }
   let body = null;
-  try { body = await res.json(); } catch {}
+  try { body = await res.clone().json(); } catch {}
   if (!res.ok) {
-    const err = new Error(body?.error || `Request failed (${res.status})`);
+    // If body has a server-provided error message use it, otherwise tag with
+    // the HTTP status so the user sees something more useful than a bare
+    // proxy "Not found".
+    const baseMsg = body?.error || `Request failed (${res.status} ${res.statusText || ""})`.trim();
+    const err = new Error(baseMsg);
     err.status = res.status;
     err.body = body;
     throw err;

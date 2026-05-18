@@ -1,12 +1,48 @@
 // Production entrypoint: run pending Prisma migrations before booting Express.
 // Skips migration when DATABASE_URL is missing (in-memory fallback) so the
 // server still starts in environments without a real database.
+//
+// PRISMA_DB_PUSH=1 also runs `prisma db push` after migrate deploy. Use this
+// when the deployment doesn't track formal migrations and the schema has
+// drifted (e.g. new columns added to schema.prisma). It's idempotent — a
+// no-op when the live schema already matches.
 
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const backendDir = path.resolve(here, '..');
+
+function runPrisma(args, { failOnError }) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('npx', ['prisma', ...args], {
+      cwd: backendDir,
+      stdio: 'inherit',
+      env: process.env,
+    });
+    proc.on('exit', (code) => {
+      if (code !== 0) {
+        const msg = `[start] prisma ${args.join(' ')} exited with code ${code}.`;
+        if (failOnError) {
+          console.error(`${msg} Refusing to start with a possibly-incompatible schema.`);
+          return reject(new Error(`prisma ${args[0]} failed (${code})`));
+        }
+        console.warn(`${msg} (continuing.)`);
+      }
+      resolve();
+    });
+    proc.on('error', (err) => {
+      const msg = `[start] failed to spawn prisma: ${err.message}.`;
+      if (failOnError) {
+        console.error(`${msg} Refusing to start.`);
+        return reject(err);
+      }
+      console.warn(`${msg} (continuing.)`);
+      resolve();
+    });
+  });
+}
 
 async function runMigrate() {
   if (!process.env.DATABASE_URL && !process.env.RAILWAY_DATABASE_URL) {
@@ -15,37 +51,26 @@ async function runMigrate() {
   }
   const isProd = process.env.NODE_ENV === 'production';
   console.log('[start] Running prisma migrate deploy…');
-  await new Promise((resolve, reject) => {
-    const proc = spawn('npx', ['prisma', 'migrate', 'deploy'], {
-      cwd: path.resolve(here, '..'),
-      stdio: 'inherit',
-      env: process.env,
-    });
-    proc.on('exit', (code) => {
-      if (code !== 0) {
-        const msg = `[start] prisma migrate deploy exited with code ${code}.`;
-        if (isProd) {
-          console.error(`${msg} Refusing to start with a possibly-incompatible schema.`);
-          return reject(new Error(`migrate deploy failed (${code})`));
-        }
-        console.warn(`${msg} (dev mode — continuing so you can iterate on the schema.)`);
-      }
-      resolve();
-    });
-    proc.on('error', (err) => {
-      const msg = `[start] failed to spawn prisma: ${err.message}.`;
-      if (isProd) {
-        console.error(`${msg} Refusing to start.`);
-        return reject(err);
-      }
-      console.warn(`${msg} (dev mode — continuing.)`);
-      resolve();
-    });
-  });
+  await runPrisma(['migrate', 'deploy'], { failOnError: isProd });
+}
+
+async function runDbPush() {
+  if (process.env.PRISMA_DB_PUSH !== '1') return;
+  if (!process.env.DATABASE_URL && !process.env.RAILWAY_DATABASE_URL) {
+    console.log('[start] PRISMA_DB_PUSH=1 but no DATABASE_URL — skipping.');
+    return;
+  }
+  const isProd = process.env.NODE_ENV === 'production';
+  // --accept-data-loss is required so column drops (e.g. removing a now-unused
+  // field from schema.prisma) actually apply. The env var is the gate — if
+  // you don't want destructive changes to flow, leave PRISMA_DB_PUSH unset.
+  console.log('[start] PRISMA_DB_PUSH=1 — running prisma db push --accept-data-loss…');
+  await runPrisma(['db', 'push', '--accept-data-loss', '--skip-generate'], { failOnError: isProd });
 }
 
 try {
   await runMigrate();
+  await runDbPush();
   await import('./server.js');
 } catch (err) {
   console.error('[start] fatal:', err?.message || err);

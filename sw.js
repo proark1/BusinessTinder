@@ -1,4 +1,4 @@
-const CACHE = 'biztinder-v8';
+const CACHE = 'biztinder-v9';
 const ASSETS = ['/', '/index.html', '/styles.css', '/script.js', '/manifest.webmanifest', '/icon.svg', '/src/matchEngine.js', '/src/discovery.js', '/src/swipeState.js', '/src/portability.js'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
@@ -17,11 +17,18 @@ self.addEventListener('fetch', (e) => {
     '/auth', '/discover', '/me', '/matches', '/messages', '/conversations',
     '/swipes', '/likes', '/saved', '/blocks', '/reports', '/push', '/plan',
     '/referrals', '/icebreakers', '/search', '/health', '/u/', '/profiles',
-    '/prompts', '/profile-views',
+    '/prompts', '/profile-views', '/upload', '/admin', '/boost',
   ];
   if (bypass.some((p) => url.pathname === p || url.pathname.startsWith(p + '/'))) return;
-  // Always go to network for the HTML shell so deploys roll out immediately.
-  if (e.request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html')) {
+  // Always go to network for the HTML shell AND for the core JS/CSS so
+  // deploys roll out immediately. Cache stays as the offline fallback.
+  if (
+    e.request.mode === 'navigate' ||
+    url.pathname === '/' ||
+    url.pathname.endsWith('.html') ||
+    url.pathname === '/script.js' ||
+    url.pathname === '/styles.css'
+  ) {
     e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
     return;
   }

@@ -26,6 +26,9 @@ model User {
   resetToken            String?   @unique
   resetTokenExpiresAt   DateTime?
   verified              Boolean   @default(false)
+  lastLikeRevealDay     String?
+  likeRevealsToday      Int       @default(0)
+  revealedLikerIds      String[]
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   profile               Profile?
@@ -47,13 +50,14 @@ model Profile {
   industries     String[]
   skills         String[]
   location       String
+  latitude       Float?
+  longitude      Float?
   remoteOk       Boolean  @default(false)
   commitment     String?
   linkedinUrl    String?
   avatarUrl      String?
   photoUrl       String?
   photos         String[]
-  videoIntroUrl  String?
   pastCompanies  String[]
   hoursPerWeek   Int?
   calLink        String?

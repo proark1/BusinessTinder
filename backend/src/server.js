@@ -13,6 +13,10 @@ import { moderateText } from './moderation.js';
 import { suggestIcebreakers } from './icebreakers.js';
 import { rateLimit } from './rateLimit.js';
 import { PROMPTS, normalizePrompts, mutualHighlights } from './prompts.js';
+import { sendVerifyEmail, sendResetEmail, sendMatchEmail, HAS_EMAIL } from './email.js';
+import { geocode, distanceKm, normalizeLocation } from './geocode.js';
+import { uploadDataUrl, HAS_CLOUD_UPLOAD } from './upload.js';
+import { isDisposableEmail } from './disposable.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -60,6 +64,11 @@ const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY || '';
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:noreply@businesstinder.app';
 const FREE_DAILY_SWIPES = Number(process.env.FREE_DAILY_SWIPES || 30);
+const FREE_DAILY_LIKE_REVEALS = Number(process.env.FREE_DAILY_LIKE_REVEALS || 1);
+const ADMIN_EMAILS = new Set(
+  (process.env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+);
+const APP_URL = process.env.APP_URL || '';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
 const prisma = DATABASE_URL && PrismaClient
@@ -76,6 +85,12 @@ if (!prisma) {
 
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 if (!googleClient) console.warn('[warn] GOOGLE_CLIENT_ID not set — Google login disabled.');
+
+if (HAS_EMAIL) console.log('[info] Email delivery configured (Resend).');
+else console.warn('[warn] RESEND_API_KEY not set — emails will be logged to console.');
+
+if (HAS_CLOUD_UPLOAD) console.log('[info] Cloud image upload configured (Cloudinary).');
+else console.warn('[warn] CLOUDINARY_URL not set — uploads fall back to inline base64.');
 
 let webpush = null;
 if (VAPID_PUBLIC && VAPID_PRIVATE) {
@@ -146,6 +161,7 @@ function publicUser(user) {
     referralCode: user.referralCode || null,
     emailVerified: !!user.emailVerified,
     verified: !!user.verified,
+    isAdmin: ADMIN_EMAILS.has(String(user.email || '').toLowerCase()),
   };
 }
 
@@ -305,6 +321,8 @@ app.get('/auth/config', (_req, res) => {
     googleClientId: GOOGLE_CLIENT_ID || null,
     vapidPublicKey: VAPID_PUBLIC || null,
     freeDailySwipes: FREE_DAILY_SWIPES,
+    freeDailyLikeReveals: FREE_DAILY_LIKE_REVEALS,
+    hasCloudUpload: HAS_CLOUD_UPLOAD,
   });
 });
 
@@ -335,6 +353,8 @@ async function applyReferralPayout(newUser, code) {
 app.post('/auth/register', limits.authStrict, async (req, res) => {
   const { email, password, fullName, referredBy } = req.body || {};
   if (!email || !password || !fullName) return res.status(400).json({ error: 'Missing fields' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email))) return res.status(400).json({ error: 'Invalid email address' });
+  if (isDisposableEmail(email)) return res.status(400).json({ error: 'Please use a real work or personal email — disposable domains are not allowed.' });
   if (String(password).length < 6) return res.status(400).json({ error: 'Password too short (min 6)' });
   const existing = await findUserByEmail(email);
   if (existing) return res.status(409).json({ error: 'Email already registered' });
@@ -351,12 +371,16 @@ app.post('/auth/register', limits.authStrict, async (req, res) => {
       swipesToday: 0, lastSwipeDay: null,
       emailVerified: false, verificationToken,
       verified: false,
+      lastLikeRevealDay: null, likeRevealsToday: 0, revealedLikerIds: [],
     };
     mem.users.push(user);
   }
   user = await applyReferralPayout(user, referredBy);
-  // In dev, expose verifyUrl so the client/test can complete the flow without SMTP.
-  const verifyUrl = NODE_ENV === 'production' ? undefined : `/auth/verify?token=${verificationToken}`;
+  const verifyPath = `/auth/verify?token=${verificationToken}`;
+  // Fire-and-forget — never block signup on email delivery.
+  sendVerifyEmail(user.email, user.fullName, verifyPath).catch((err) => console.warn('[email] verify', err?.message));
+  // Surface the dev-mode link to the client (omitted in prod when email is wired).
+  const verifyUrl = NODE_ENV === 'production' && HAS_EMAIL ? undefined : verifyPath;
   res.json({ token: sign(user), user: publicUser(user), verifyUrl });
 });
 
@@ -449,8 +473,24 @@ app.post('/auth/forgot', limits.authStrict, async (req, res) => {
     user.resetToken = token;
     user.resetTokenExpiresAt = expiresAt.toISOString();
   }
-  const resetUrl = NODE_ENV === 'production' ? undefined : `/?reset=${token}`;
+  const resetPath = `/?reset=${token}`;
+  sendResetEmail(user.email, user.fullName, resetPath).catch((err) => console.warn('[email] reset', err?.message));
+  const resetUrl = NODE_ENV === 'production' && HAS_EMAIL ? undefined : resetPath;
   res.json({ ok: true, resetUrl });
+});
+
+// Resend the verification email on demand.
+app.post('/auth/resend-verify', auth, limits.authStrict, async (req, res) => {
+  const me = await findUserById(req.user.userId);
+  if (!me) return res.status(404).json({ error: 'User not found' });
+  if (me.emailVerified) return res.json({ ok: true, alreadyVerified: true });
+  const token = me.verificationToken || randomCode(24);
+  if (prisma) await prisma.user.update({ where: { id: me.id }, data: { verificationToken: token } });
+  else me.verificationToken = token;
+  const verifyPath = `/auth/verify?token=${token}`;
+  sendVerifyEmail(me.email, me.fullName, verifyPath).catch(() => {});
+  const verifyUrl = NODE_ENV === 'production' && HAS_EMAIL ? undefined : verifyPath;
+  res.json({ ok: true, verifyUrl });
 });
 
 app.post('/auth/reset', limits.authStrict, async (req, res) => {
@@ -500,7 +540,7 @@ app.get('/prompts', (_req, res) => res.json({ prompts: PROMPTS }));
 const PROFILE_FIELDS = [
   'headline', 'userType', 'lookingFor', 'bio', 'stage', 'industries', 'skills',
   'location', 'remoteOk', 'commitment', 'linkedinUrl', 'avatarUrl', 'photoUrl',
-  'photos', 'videoIntroUrl', 'pastCompanies', 'hoursPerWeek', 'calLink', 'pitchDeckUrl',
+  'photos', 'pastCompanies', 'hoursPerWeek', 'calLink', 'pitchDeckUrl',
   'promptIds', 'promptAnswers',
 ];
 function sanitizeProfile(body) {
@@ -541,15 +581,34 @@ function sanitizeProfile(body) {
   return out;
 }
 
+async function profileWithGeo(existing, data) {
+  // Only re-geocode when the location text actually changed.
+  if (data.location && (!existing || normalizeLocation(existing.location) !== normalizeLocation(data.location))) {
+    const point = await geocode(data.location);
+    if (point) {
+      data.latitude = point.lat;
+      data.longitude = point.lng;
+    } else {
+      // Unknown city — keep stale coords out so distance filters don't match the wrong place.
+      data.latitude = null;
+      data.longitude = null;
+    }
+  }
+  return data;
+}
+
+// Create or fully replace the current user's profile. Used by the onboarding
+// wizard as well as the "Save changes" button in edit mode.
 app.post('/profiles', auth, async (req, res) => {
   const result = sanitizeProfile(req.body || {});
   if (result.error) return res.status(400).json({ error: result.error });
-  const data = result;
+  let data = result;
   if (!data.userType) return res.status(400).json({ error: 'userType is required' });
   if (!data.headline) return res.status(400).json({ error: 'headline is required' });
   const user = await findUserById(req.user.userId);
   const existing = await findProfileByUserId(req.user.userId);
   const slug = existing?.slug || (await uniqueSlug(slugify(user.fullName)));
+  data = await profileWithGeo(existing, data);
 
   if (prisma) {
     const profile = await prisma.profile.upsert({
@@ -563,9 +622,55 @@ app.post('/profiles', auth, async (req, res) => {
     Object.assign(existing, data, { lastActiveAt: new Date().toISOString() });
     return res.json(existing);
   }
-  const profile = { id: crypto.randomUUID(), userId: req.user.userId, slug, ...data, lastActiveAt: new Date().toISOString() };
+  const profile = {
+    id: crypto.randomUUID(), userId: req.user.userId, slug,
+    latitude: null, longitude: null,
+    ...data, lastActiveAt: new Date().toISOString(),
+  };
   mem.profiles.push(profile);
   res.json(profile);
+});
+
+// Quick partial edit (headline/bio/prompts/photos/etc) — does not force the
+// user back through the onboarding wizard.
+app.patch('/profiles', auth, async (req, res) => {
+  const existing = await findProfileByUserId(req.user.userId);
+  if (!existing) return res.status(404).json({ error: 'Profile not found — complete onboarding first.' });
+  const result = sanitizeProfile(req.body || {});
+  if (result.error) return res.status(400).json({ error: result.error });
+  const data = await profileWithGeo(existing, result);
+  if (prisma) {
+    const updated = await prisma.profile.update({
+      where: { userId: req.user.userId },
+      data: { ...data, lastActiveAt: new Date() },
+    });
+    return res.json(updated);
+  }
+  Object.assign(existing, data, { lastActiveAt: new Date().toISOString() });
+  res.json(existing);
+});
+
+// Upload an image. Accepts a base64 data URL (data:image/png;base64,…).
+// Returns { url } — either a Cloudinary https URL or the original data URL
+// when no cloud provider is configured (so the client flow is identical
+// in dev and prod).
+app.post('/upload', auth, limits.general, async (req, res) => {
+  const { dataUrl, folder } = req.body || {};
+  if (!dataUrl || typeof dataUrl !== 'string') return res.status(400).json({ error: 'dataUrl required' });
+  if (!isPhotoDataUrlSafe(dataUrl)) return res.status(400).json({ error: 'Only PNG/JPEG/WebP images are supported.' });
+  // 4MB cap on the raw base64 payload — generous for a photo, small enough not to abuse Cloudinary.
+  if (dataUrl.length > 4 * 1024 * 1024) return res.status(413).json({ error: 'Image too large (max ~3MB).' });
+  if (!HAS_CLOUD_UPLOAD) {
+    return res.json({ url: dataUrl, storage: 'inline' });
+  }
+  try {
+    const url = await uploadDataUrl(dataUrl, folder === 'chat' ? 'businesstinder/chat' : 'businesstinder/profiles');
+    if (!url) throw new Error('upload returned no url');
+    res.json({ url, storage: 'cloud' });
+  } catch (err) {
+    console.warn('[upload] cloud failed, falling back to inline', err?.message);
+    res.json({ url: dataUrl, storage: 'inline' });
+  }
 });
 
 app.get('/profiles/me', auth, async (req, res) => {
@@ -575,6 +680,7 @@ app.get('/profiles/me', auth, async (req, res) => {
 app.get('/discover', auth, async (req, res) => {
   const mine = req.user.userId;
   const meProfile = await findProfileByUserId(mine);
+  const maxKm = req.query.maxKm ? Math.max(1, Math.min(20000, Number(req.query.maxKm) || 0)) : null;
   const filters = {
     stage: req.query.stage || null,
     lookingFor: req.query.lookingFor || null,
@@ -629,6 +735,20 @@ app.get('/discover', auth, async (req, res) => {
   }
   const boostSet = new Set(superLikers.map((s) => s.fromUserId));
 
+  // Distance filter + per-profile distanceKm enrichment. Skipped silently
+  // when either side hasn't been geocoded — text/remote-OK signals still
+  // drive matching.
+  const meGeo = meProfile?.latitude != null && meProfile?.longitude != null
+    ? { lat: meProfile.latitude, lng: meProfile.longitude } : null;
+  if (maxKm && meGeo) {
+    filtered = filtered.filter((p) => {
+      if (p.remoteOk && meProfile?.remoteOk) return true; // mutual remote bypasses distance
+      if (p.latitude == null || p.longitude == null) return true; // keep ungeocoded — fall through
+      const d = distanceKm(meGeo, { lat: p.latitude, lng: p.longitude });
+      return d == null || d <= maxKm;
+    });
+  }
+
   const ranked = diversify(rankProfiles(meProfile, filtered));
   ranked.sort((a, b) => {
     const aB = boostSet.has(a.profile.userId) ? 1 : 0;
@@ -636,15 +756,20 @@ app.get('/discover', auth, async (req, res) => {
     if (aB !== bB) return bB - aB;
     return 0; // preserve ranked order
   });
-  const out = ranked.map(({ profile, score, reasons }) => ({
-    ...profile,
-    fullName: profile.user?.fullName,
-    avatarUrl: profile.photoUrl || profile.avatarUrl || profile.user?.avatarUrl,
-    matchScore: score,
-    matchReasons: reasons,
-    mutualHighlights: mutualHighlights(meProfile, profile),
-    superLikedYou: boostSet.has(profile.userId),
-  }));
+  const out = ranked.map(({ profile, score, reasons }) => {
+    const km = meGeo && profile.latitude != null && profile.longitude != null
+      ? distanceKm(meGeo, { lat: profile.latitude, lng: profile.longitude }) : null;
+    return {
+      ...profile,
+      fullName: profile.user?.fullName,
+      avatarUrl: profile.photoUrl || profile.avatarUrl || profile.user?.avatarUrl,
+      matchScore: score,
+      matchReasons: reasons,
+      mutualHighlights: mutualHighlights(meProfile, profile),
+      superLikedYou: boostSet.has(profile.userId),
+      distanceKm: km != null ? Math.round(km) : null,
+    };
+  });
   res.json(out);
 });
 
@@ -811,6 +936,9 @@ app.post('/swipes', auth, limits.swipe, async (req, res) => {
       const theirProfile = await prisma.profile.findUnique({ where: { userId: toUserId } });
       const myProfile = await prisma.profile.findUnique({ where: { userId: fromUserId } });
       pushToUser(toUserId, { title: 'New match on BusinessTinder', body: `${user.fullName} matched with you.` });
+      // Also email the other side — push is opt-in, email is the safer net.
+      const otherUser = await findUserById(toUserId);
+      if (otherUser?.email) sendMatchEmail(otherUser.email, otherUser.fullName, user.fullName).catch(() => {});
       return res.json({ matched: true, match, conversation, icebreakers: suggestIcebreakers(theirProfile), theirIcebreakers: suggestIcebreakers(myProfile) });
     }
     return res.json({ matched: false });
@@ -836,6 +964,8 @@ app.post('/swipes', auth, limits.swipe, async (req, res) => {
     const theirProfile = mem.profiles.find((p) => p.userId === toUserId);
     const myProfile = mem.profiles.find((p) => p.userId === fromUserId);
     pushToUser(toUserId, { title: 'New match on BusinessTinder', body: `${user.fullName} matched with you.` });
+    const otherUser = mem.users.find((u) => u.id === toUserId);
+    if (otherUser?.email) sendMatchEmail(otherUser.email, otherUser.fullName, user.fullName).catch(() => {});
     return res.json({ matched: true, match, conversation, icebreakers: suggestIcebreakers(theirProfile), theirIcebreakers: suggestIcebreakers(myProfile) });
   }
   res.json({ matched: false });
@@ -855,23 +985,155 @@ app.get('/likes/incoming', auth, async (req, res) => {
   }
   const user = await findUserById(me);
   const isPro = effectivePlanTier(user) === 'PRO';
-  if (!isPro) return res.json({ count: likers.length, profiles: null, locked: true });
+  const likerIds = likers.map((l) => l.fromUserId);
+  const fetchProfilesByIds = async (ids) => {
+    if (!ids.length) return [];
+    if (prisma) {
+      return prisma.profile.findMany({
+        where: { userId: { in: ids } },
+        include: { user: { select: { fullName: true, avatarUrl: true } } },
+      });
+    }
+    return mem.profiles
+      .filter((p) => ids.includes(p.userId))
+      .map((p) => ({ ...p, user: { fullName: mem.users.find((u) => u.id === p.userId)?.fullName } }));
+  };
+  const shape = (arr) => arr.map((p) => ({
+    ...p, fullName: p.user?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || p.user?.avatarUrl,
+  }));
 
-  let profiles;
+  if (isPro) {
+    const profiles = await fetchProfilesByIds(likerIds);
+    return res.json({ count: likers.length, locked: false, profiles: shape(profiles) });
+  }
+
+  // FREE: show silhouettes of every liker (no identifying fields) so users
+  // see momentum even before paying. They can additionally unlock one full
+  // reveal per day (rotating across the liker set).
+  const today = todayKey();
+  const day = user.lastLikeRevealDay || null;
+  const revealsToday = day === today ? user.likeRevealsToday || 0 : 0;
+  const revealedIds = (user.revealedLikerIds || []).filter((id) => likerIds.includes(id));
+  const revealedProfiles = revealedIds.length ? shape(await fetchProfilesByIds(revealedIds)) : [];
+
+  const silhouettes = likers.map((l) => ({
+    userId: l.fromUserId,
+    masked: true,
+    revealed: revealedIds.includes(l.fromUserId),
+  }));
+
+  res.json({
+    count: likers.length,
+    locked: true,
+    silhouettes,
+    revealedProfiles,
+    revealsToday,
+    dailyRevealLimit: FREE_DAILY_LIKE_REVEALS,
+    canReveal: likers.length > revealedIds.length && revealsToday < FREE_DAILY_LIKE_REVEALS,
+  });
+});
+
+// Unlock one liker per day on the free plan. Picks the most recent liker the
+// user hasn't seen yet — gives them a fresh face every day they come back.
+app.post('/likes/reveal', auth, limits.general, async (req, res) => {
+  const me = req.user.userId;
+  const user = await findUserById(me);
+  if (effectivePlanTier(user) === 'PRO') return res.status(400).json({ error: 'Already Pro — all likers visible.' });
+  const today = todayKey();
+  const day = user.lastLikeRevealDay || null;
+  const revealsToday = day === today ? user.likeRevealsToday || 0 : 0;
+  if (revealsToday >= FREE_DAILY_LIKE_REVEALS) {
+    return res.status(429).json({ error: 'Out of free reveals today. Upgrade to Pro to see everyone.' });
+  }
+  let likers;
   if (prisma) {
-    profiles = await prisma.profile.findMany({
-      where: { userId: { in: likers.map((l) => l.fromUserId) } },
+    likers = await prisma.swipe.findMany({
+      where: { toUserId: me, direction: 'RIGHT' },
+      orderBy: { createdAt: 'desc' },
+    });
+    const swiped = await prisma.swipe.findMany({ where: { fromUserId: me }, select: { toUserId: true } });
+    const seen = new Set(swiped.map((s) => s.toUserId));
+    likers = likers.filter((l) => !seen.has(l.fromUserId));
+  } else {
+    const seen = new Set(mem.swipes.filter((s) => s.fromUserId === me).map((s) => s.toUserId));
+    likers = mem.swipes
+      .filter((s) => s.toUserId === me && s.direction === 'RIGHT' && !seen.has(s.fromUserId))
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  }
+  const already = new Set(user.revealedLikerIds || []);
+  const next = likers.find((l) => !already.has(l.fromUserId));
+  if (!next) return res.status(404).json({ error: 'Nobody new to reveal yet.' });
+
+  const newRevealed = [...(user.revealedLikerIds || []), next.fromUserId].slice(-50);
+  if (prisma) {
+    await prisma.user.update({
+      where: { id: me },
+      data: { lastLikeRevealDay: today, likeRevealsToday: revealsToday + 1, revealedLikerIds: newRevealed },
+    });
+  } else {
+    user.lastLikeRevealDay = today;
+    user.likeRevealsToday = revealsToday + 1;
+    user.revealedLikerIds = newRevealed;
+  }
+
+  let profile;
+  if (prisma) {
+    profile = await prisma.profile.findUnique({
+      where: { userId: next.fromUserId },
       include: { user: { select: { fullName: true, avatarUrl: true } } },
     });
   } else {
-    profiles = mem.profiles
-      .filter((p) => likers.some((l) => l.fromUserId === p.userId))
-      .map((p) => ({ ...p, user: { fullName: mem.users.find((u) => u.id === p.userId)?.fullName } }));
+    const p = mem.profiles.find((p) => p.userId === next.fromUserId);
+    if (p) profile = { ...p, user: { fullName: mem.users.find((u) => u.id === next.fromUserId)?.fullName } };
+  }
+  if (!profile) return res.status(404).json({ error: 'Profile no longer available.' });
+
+  res.json({
+    profile: {
+      ...profile,
+      fullName: profile.user?.fullName,
+      avatarUrl: profile.photoUrl || profile.avatarUrl || profile.user?.avatarUrl,
+    },
+    revealsToday: revealsToday + 1,
+    dailyRevealLimit: FREE_DAILY_LIKE_REVEALS,
+  });
+});
+
+// Admin verification. Flips the `verified` badge on a target user. Gated by
+// the ADMIN_EMAILS env var — no public route exists for users to self-verify.
+function isAdminUser(user) {
+  return !!user && ADMIN_EMAILS.has(String(user.email || '').toLowerCase());
+}
+
+app.post('/admin/verify', auth, async (req, res) => {
+  const me = await findUserById(req.user.userId);
+  if (!isAdminUser(me)) return res.status(403).json({ error: 'Admin only' });
+  const { userId, verified } = req.body || {};
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  if (prisma) await prisma.user.update({ where: { id: userId }, data: { verified: !!verified } });
+  else {
+    const u = mem.users.find((x) => x.id === userId);
+    if (u) u.verified = !!verified;
+  }
+  res.json({ ok: true });
+});
+
+// Tiny admin queue endpoint so reviewers can see pending reports + recent users.
+app.get('/admin/queue', auth, async (req, res) => {
+  const me = await findUserById(req.user.userId);
+  if (!isAdminUser(me)) return res.status(403).json({ error: 'Admin only' });
+  if (prisma) {
+    const [reports, recentUsers] = await Promise.all([
+      prisma.report.findMany({ orderBy: { createdAt: 'desc' }, take: 50 }),
+      prisma.user.findMany({ orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, email: true, fullName: true, verified: true, emailVerified: true, createdAt: true } }),
+    ]);
+    return res.json({ reports, recentUsers });
   }
   res.json({
-    count: likers.length,
-    locked: false,
-    profiles: profiles.map((p) => ({ ...p, fullName: p.user?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || p.user?.avatarUrl })),
+    reports: mem.reports.slice(-50).reverse(),
+    recentUsers: mem.users.slice(-50).reverse().map((u) => ({
+      id: u.id, email: u.email, fullName: u.fullName, verified: !!u.verified, emailVerified: !!u.emailVerified, createdAt: u.createdAt,
+    })),
   });
 });
 
@@ -990,8 +1252,15 @@ app.post('/messages/:conversationId', auth, limits.message, async (req, res) => 
   const { conversationId } = req.params;
   const { body, kind } = req.body || {};
   if (!body) return res.status(400).json({ error: 'Missing body' });
-  const mod = moderateText(body);
-  if (!mod.ok) return res.status(400).json({ error: `Message blocked: ${mod.reason}` });
+  const safeKind = ['text', 'image'].includes(kind) ? kind : 'text';
+  if (safeKind === 'image') {
+    if (!/^https?:\/\//i.test(String(body)) && !isPhotoDataUrlSafe(body)) {
+      return res.status(400).json({ error: 'Image must be an https URL or PNG/JPEG/WebP data URL.' });
+    }
+  } else {
+    const mod = moderateText(body);
+    if (!mod.ok) return res.status(400).json({ error: `Message blocked: ${mod.reason}` });
+  }
   if (!(await canAccessConversation(req.user.userId, conversationId))) {
     return res.status(403).json({ error: 'Forbidden' });
   }
@@ -1002,11 +1271,11 @@ app.post('/messages/:conversationId', auth, limits.message, async (req, res) => 
   let saved;
   if (prisma) {
     saved = await prisma.message.create({
-      data: { conversationId, senderId: req.user.userId, body, kind: kind || 'text', status: 'SENT' },
+      data: { conversationId, senderId: req.user.userId, body, kind: safeKind, status: 'SENT' },
     });
   } else {
     saved = {
-      id: crypto.randomUUID(), conversationId, senderId: req.user.userId, body, kind: kind || 'text',
+      id: crypto.randomUUID(), conversationId, senderId: req.user.userId, body, kind: safeKind,
       status: 'SENT', createdAt: new Date().toISOString(),
     };
     mem.messages.push(saved);
@@ -1353,9 +1622,17 @@ wss.on('connection', (ws, req) => {
 
       if (data.type === 'send_message') {
         const { conversationId, toUserId, body, kind } = data;
-        const mod = moderateText(body);
-        if (!mod.ok) {
-          return ws.send(JSON.stringify({ type: 'error', error: `Blocked: ${mod.reason}` }));
+        if (!body) return ws.send(JSON.stringify({ type: 'error', error: 'Empty message' }));
+        const safeKind = ['text', 'image'].includes(kind) ? kind : 'text';
+        if (safeKind === 'image') {
+          if (!/^https?:\/\//i.test(String(body)) && !isPhotoDataUrlSafe(body)) {
+            return ws.send(JSON.stringify({ type: 'error', error: 'Invalid image' }));
+          }
+        } else {
+          const mod = moderateText(body);
+          if (!mod.ok) {
+            return ws.send(JSON.stringify({ type: 'error', error: `Blocked: ${mod.reason}` }));
+          }
         }
         if (!(await canAccessConversation(userId, conversationId))) {
           return ws.send(JSON.stringify({ type: 'error', error: 'Forbidden conversation' }));
@@ -1366,18 +1643,19 @@ wss.on('connection', (ws, req) => {
         let saved;
         if (prisma) {
           saved = await prisma.message.create({
-            data: { conversationId, senderId: userId, body, kind: kind || 'text', status: 'DELIVERED' },
+            data: { conversationId, senderId: userId, body, kind: safeKind, status: 'DELIVERED' },
           });
         } else {
           saved = {
-            id: crypto.randomUUID(), conversationId, senderId: userId, body, kind: kind || 'text',
+            id: crypto.randomUUID(), conversationId, senderId: userId, body, kind: safeKind,
             status: 'DELIVERED', createdAt: new Date().toISOString(),
           };
           mem.messages.push(saved);
         }
         ws.send(JSON.stringify({ type: 'message_ack', messageId: saved.id, status: 'DELIVERED' }));
+        const preview = safeKind === 'image' ? '📷 Photo' : String(body).slice(0, 80);
         const delivered = sendToUser(toUserId, { type: 'message', message: saved });
-        if (!delivered) pushToUser(toUserId, { title: 'New message', body: body.slice(0, 80) });
+        if (!delivered) pushToUser(toUserId, { title: 'New message', body: preview });
       }
 
       if (data.type === 'typing') {

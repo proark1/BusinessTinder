@@ -619,6 +619,9 @@ input:focus, textarea:focus, select:focus {
   color: #1a0f33;
 }
 
+/* Topbar logout sits next to the gear; keep it minimal. */
+#topbarLogoutBtn { padding: 6px 10px; font-size: 1rem; line-height: 1; }
+
 /* ---------- Misc ---------- */
 .center { text-align: center; }
 code { font-family: ui-monospace, monospace; background: rgba(255, 255, 255, 0.06); padding: 2px 6px; border-radius: 6px; font-size: 0.86rem; }

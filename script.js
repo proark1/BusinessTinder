@@ -1577,6 +1577,9 @@ savedList.addEventListener("click", async (e) => {
 // ---------- settings, plan, push, install ----------
 qs("settingsBtn").addEventListener("click", () => show("settings"));
 qs("logoutBtn").addEventListener("click", logout);
+qs("topbarLogoutBtn").addEventListener("click", () => {
+  if (confirm("Log out?")) logout();
+});
 
 qs("deleteAccountBtn").addEventListener("click", async () => {
   if (!confirm("Permanently delete your account and all your data? This cannot be undone.")) return;
@@ -1720,6 +1723,27 @@ async function openAdminModal() {
   try {
     const q = await api("/admin/queue");
     body.innerHTML = "";
+
+    // Top: seed-fakes tool.
+    const seedRow = document.createElement("div");
+    seedRow.className = "admin-row";
+    seedRow.innerHTML = `<div><strong>Seed test users</strong><div class="settings-sub">Creates up to 10 demo profiles for testing (idempotent).</div></div><button class="ghost" type="button" id="seedFakesBtn">Seed 10</button>`;
+    body.appendChild(seedRow);
+    qs("seedFakesBtn").addEventListener("click", async () => {
+      const btn = qs("seedFakesBtn");
+      btn.disabled = true; btn.textContent = "Seeding…";
+      try {
+        const r = await api("/admin/seed-fakes", { method: "POST" });
+        const out = document.createElement("div");
+        out.className = "admin-row";
+        out.innerHTML = `<div><strong>${r.created} created · ${r.skipped} already existed</strong><div class="settings-sub">Sign in as any of them with password <code>${esc(r.credentials.password)}</code></div></div>`;
+        body.insertBefore(out, seedRow.nextSibling);
+        showToast(`${r.created} test users added`);
+        if (r.created > 0) loadDiscover();
+      } catch (e) { alert(e.message); }
+      finally { btn.disabled = false; btn.textContent = "Seed 10"; }
+    });
+
     const usersTitle = document.createElement("h3");
     usersTitle.textContent = `Recent signups (${q.recentUsers?.length || 0})`;
     body.appendChild(usersTitle);

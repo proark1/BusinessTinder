@@ -76,7 +76,13 @@ async function runDbPush() {
 try {
   await runMigrate();
   await runDbPush();
-  await import('./server.js');
+  const { server } = await import('./server.js');
+  // Explicit listen — server.js's own `if (isMain)` guard is false when it's
+  // loaded via import() (process.argv[1] is start.js, not server.js), so the
+  // bind has to happen here. The guard still protects test runs that pull in
+  // `app`/`server` without going through start.js.
+  const port = process.env.PORT || 4000;
+  server.listen(port, () => console.log(`[start] Backend listening on :${port}`));
 } catch (err) {
   console.error('[start] fatal:', err?.message || err);
   process.exit(1);

@@ -49,9 +49,14 @@ async function runMigrate() {
     console.log('[start] No DATABASE_URL — skipping prisma migrate deploy.');
     return;
   }
-  const isProd = process.env.NODE_ENV === 'production';
+  // migrate deploy is a no-op when there are no migrations on disk, so a
+  // non-zero exit here means a real problem (broken connection, drift, etc).
+  // Even so, don't block the server boot — surface it loudly and let the
+  // operator decide whether to roll back. The server will then either work
+  // (schema OK) or fail-fast on the first query that needs the missing
+  // columns.
   console.log('[start] Running prisma migrate deploy…');
-  await runPrisma(['migrate', 'deploy'], { failOnError: isProd });
+  await runPrisma(['migrate', 'deploy'], { failOnError: false });
 }
 
 async function runDbPush() {
@@ -60,12 +65,12 @@ async function runDbPush() {
     console.log('[start] PRISMA_DB_PUSH=1 but no DATABASE_URL — skipping.');
     return;
   }
-  const isProd = process.env.NODE_ENV === 'production';
   // --accept-data-loss is required so column drops (e.g. removing a now-unused
   // field from schema.prisma) actually apply. The env var is the gate — if
   // you don't want destructive changes to flow, leave PRISMA_DB_PUSH unset.
+  // Best-effort: if push fails we still boot so users aren't locked out.
   console.log('[start] PRISMA_DB_PUSH=1 — running prisma db push --accept-data-loss…');
-  await runPrisma(['db', 'push', '--accept-data-loss', '--skip-generate'], { failOnError: isProd });
+  await runPrisma(['db', 'push', '--accept-data-loss', '--skip-generate'], { failOnError: false });
 }
 
 try {

@@ -22,9 +22,12 @@ const state = {
   saved: [],
   swipeHistory: [],
   activeMatch: null,
-  filters: { stage: "", lookingFor: "", industry: "all" },
+  filters: { stage: "", lookingFor: "", industry: "all", maxKm: "" },
   view: "cards",
-  config: { googleClientId: null, vapidPublicKey: null, freeDailySwipes: 30 },
+  config: { googleClientId: null, vapidPublicKey: null, freeDailySwipes: 30, freeDailyLikeReveals: 1, hasCloudUpload: false },
+  isEditingProfile: false,
+  chatMessagesCache: [],
+  chatSearchQuery: "",
   ws: null,
   wsReconnectAttempts: 0,
   installPrompt: null,
@@ -250,7 +253,8 @@ function renderCard(p, index, total) {
   node.querySelector(".avatar").src = avatarFor(p);
   node.querySelector("h2").textContent = p.fullName || "Anonymous";
   node.querySelector(".role").textContent = p.headline || "";
-  node.querySelector(".meta").textContent = `${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote" : ""}`;
+  const distBit = typeof p.distanceKm === "number" ? ` · ${p.distanceKm} km away` : "";
+  node.querySelector(".meta").textContent = `${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote" : ""}${distBit}`;
   node.querySelector(".bio").textContent = p.bio || "";
   const tags = node.querySelector(".tags");
   (p.industries || []).slice(0, 4).forEach((t) => { const li = document.createElement("li"); li.textContent = t; tags.appendChild(li); });
@@ -349,7 +353,8 @@ function renderGrid(target, profiles) {
     card.querySelector("img").src = avatarFor(p);
     card.querySelector("h3").textContent = p.fullName || "";
     card.querySelector(".role").textContent = p.headline || "";
-    card.querySelector(".meta").textContent = `${describeUserType(p.userType)} · ${p.location || ""}`;
+    const km = typeof p.distanceKm === "number" ? ` · ${p.distanceKm} km` : "";
+    card.querySelector(".meta").textContent = `${describeUserType(p.userType)} · ${p.location || ""}${km}`;
     card.querySelector(".score").textContent =
       typeof p.matchScore === "number" ? `${p.matchScore}% match` : "";
     card.addEventListener("click", () => openDetail(p));
@@ -424,6 +429,7 @@ async function loadDiscover() {
   if (state.filters.stage) params.set("stage", state.filters.stage);
   if (state.filters.lookingFor) params.set("lookingFor", state.filters.lookingFor);
   if (state.filters.industry && state.filters.industry !== "all") params.set("industry", state.filters.industry);
+  if (state.filters.maxKm) params.set("maxKm", state.filters.maxKm);
   try {
     state.pool = await api(`/discover?${params.toString()}`);
     state.index = 0;
@@ -481,36 +487,73 @@ async function loadViewedYou() {
   } catch {}
 }
 
+function renderLikerRow(p, container) {
+  const div = document.createElement("div");
+  div.className = "liked-row";
+  div.innerHTML = `<img alt="" /><div><strong></strong><br/><small style="color:var(--text-2)"></small></div>`;
+  div.querySelector("img").src = avatarFor(p);
+  div.querySelector("strong").textContent = p.fullName || "";
+  div.querySelector("small").textContent = p.headline || "";
+  div.addEventListener("click", () => openDetail(p));
+  container.appendChild(div);
+}
+
 async function loadLikedYou() {
   try {
     const data = await api("/likes/incoming");
     qs("likedCount").textContent = data.count;
     qs("likedBadge").hidden = data.count === 0;
     qs("likedYouCount").textContent = data.count ? ` · ${data.count}` : "";
+    likedYouBox.innerHTML = "";
+
+    if (!data.count) {
+      likedYouBox.innerHTML = `<div class="empty"><div class="empty-icon">💌</div><p>No one has liked you yet. Make sure your profile photo and headline are strong.</p></div>`;
+      return;
+    }
+
     if (data.locked) {
-      likedYouBox.innerHTML = `<div class="liked-locked">
+      // Render revealed (full) cards + silhouettes for the rest.
+      (data.revealedProfiles || []).forEach((p) => renderLikerRow(p, likedYouBox));
+      const stillMasked = (data.silhouettes || []).filter((s) => !s.revealed);
+      if (stillMasked.length) {
+        const grid = document.createElement("div");
+        grid.className = "silhouette-grid";
+        stillMasked.forEach(() => {
+          const cell = document.createElement("div");
+          cell.className = "silhouette";
+          cell.textContent = "?";
+          grid.appendChild(cell);
+        });
+        likedYouBox.appendChild(grid);
+      }
+      const callout = document.createElement("div");
+      callout.className = "liked-locked";
+      const remaining = (data.dailyRevealLimit || 0) - (data.revealsToday || 0);
+      callout.innerHTML = `
         <div class="big">${data.count}</div>
         <p>${data.count === 1 ? "person" : "people"} liked your profile</p>
-        <button class="primary" id="seeLikesBtn" type="button">Upgrade to Pro to see who</button>
-      </div>`;
+        <div class="reveal-actions">
+          <button class="ghost" id="revealOneBtn" type="button" ${data.canReveal ? "" : "disabled"}>
+            ${data.canReveal ? `Reveal one (${remaining} left today)` : "No free reveals left today"}
+          </button>
+          <button class="primary" id="seeLikesBtn" type="button">See everyone with Pro</button>
+        </div>`;
+      likedYouBox.appendChild(callout);
       qs("seeLikesBtn")?.addEventListener("click", () => openModal(qs("proModal")));
-    } else {
-      likedYouBox.innerHTML = "";
-      if (!data.profiles?.length) {
-        likedYouBox.innerHTML = `<div class="empty"><div class="empty-icon">💌</div><p>No one has liked you yet. Make sure your profile photo and headline are strong.</p></div>`;
-      } else {
-        (data.profiles || []).forEach((p) => {
-          const div = document.createElement("div");
-          div.className = "liked-row";
-          div.innerHTML = `<img alt="" /><div><strong></strong><br/><small style="color:var(--text-2)"></small></div>`;
-          div.querySelector("img").src = avatarFor(p);
-          div.querySelector("strong").textContent = p.fullName || "";
-          div.querySelector("small").textContent = p.headline || "";
-          div.addEventListener("click", () => openDetail(p));
-          likedYouBox.appendChild(div);
-        });
-      }
+      qs("revealOneBtn")?.addEventListener("click", async () => {
+        try {
+          const r = await api("/likes/reveal", { method: "POST" });
+          if (r.profile) showToast(`${r.profile.fullName} liked you`);
+          await loadLikedYou();
+        } catch (e) {
+          if (e.status === 429) openModal(qs("proModal"));
+          else showToast(e.message);
+        }
+      });
+      return;
     }
+
+    (data.profiles || []).forEach((p) => renderLikerRow(p, likedYouBox));
   } catch {}
 }
 
@@ -747,7 +790,16 @@ function showWizardStep(n) {
   qs("wizardBack").hidden = n === 1;
   qs("wizardNext").hidden = n === STEP_COUNT;
   qs("wizardSubmit").hidden = n !== STEP_COUNT;
+  qs("wizardSubmit").textContent = state.isEditingProfile ? "Save changes" : "Publish profile";
+  qs("editModeBanner").hidden = !state.isEditingProfile;
   if (n === STEP_COUNT) renderPreviewCard();
+}
+
+function enterProfileEditor() {
+  state.isEditingProfile = !!state.profile;
+  fillOnboardingForm(state.profile);
+  showWizardStep(1);
+  show("onboarding");
 }
 function validateStep(n) {
   const form = qs("onboardingForm");
@@ -843,13 +895,22 @@ function renderPhotoGallery() {
   if (state.pendingPhotos.length < 5) {
     const add = document.createElement("label");
     add.className = "photo-add";
-    add.innerHTML = "＋<input type='file' accept='image/*' style='display:none;' />";
+    add.innerHTML = "＋<input type='file' accept='image/png,image/jpeg,image/webp' style='display:none;' />";
     add.querySelector("input").addEventListener("change", async (e) => {
       const file = e.target.files?.[0]; if (!file) return;
-      if (file.size > 700 * 1024) return alert("Photo too large (max 700KB).");
+      if (file.size > 3 * 1024 * 1024) return alert("Photo too large (max 3MB).");
       const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
-      state.pendingPhotos.push(dataUrl);
-      renderPhotoGallery();
+      add.classList.add("uploading");
+      try {
+        const up = await api("/upload", { method: "POST", body: JSON.stringify({ dataUrl, folder: "profile" }) });
+        state.pendingPhotos.push(up.url || dataUrl);
+      } catch (err) {
+        // Fall back to inline so users aren't blocked if the upload service is down.
+        console.warn("upload failed, using inline", err?.message);
+        state.pendingPhotos.push(dataUrl);
+      } finally {
+        renderPhotoGallery();
+      }
     });
     g.appendChild(add);
   }
@@ -882,12 +943,22 @@ qs("onboardingForm").addEventListener("submit", async (e) => {
   showAuthError("onboardingError", "");
   try {
     const payload = gatherProfilePayload();
+    const wasEditing = state.isEditingProfile;
     state.profile = await api("/profiles", { method: "POST", body: JSON.stringify(payload) });
-    show("swipe");
+    state.isEditingProfile = false;
+    updateChrome();
+    show(wasEditing ? "settings" : "swipe");
+    if (wasEditing) showToast("Profile saved");
     await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou(), loadViewedYou()]);
   } catch (err) {
     showAuthError("onboardingError", err.message);
   }
+});
+
+qs("editCancelBtn").addEventListener("click", () => {
+  state.isEditingProfile = false;
+  fillOnboardingForm(state.profile);
+  show(state.profile ? "settings" : "auth");
 });
 
 // ---------- auth ----------
@@ -1080,6 +1151,8 @@ function updateChrome() {
   } else {
     banner.hidden = true;
   }
+  // Admin entry
+  qs("adminRow").hidden = !state.user?.isAdmin;
   // Auto-detect ?verified=1 redirect from email link
   if (new URLSearchParams(location.search).get("verified") === "1") {
     showToast("Email verified ✓");
@@ -1205,18 +1278,44 @@ function connectWebSocket() {
     ws.onerror = () => { try { ws.close(); } catch {} };
   } catch {}
 }
-function appendMessage(m) {
-  const box = qs("messages");
+function messageMatchesSearch(m) {
+  if (!state.chatSearchQuery) return true;
+  if (m.kind === "image") return false; // search is text-only
+  return String(m.body || "").toLowerCase().includes(state.chatSearchQuery);
+}
+function buildMessageNode(m) {
   const div = document.createElement("div");
   div.className = `msg ${m.senderId === state.user.id ? "me" : "them"}`;
-  div.textContent = m.body || "";
+  div.dataset.messageId = m.id || "";
+  if (m.kind === "image") {
+    const img = document.createElement("img");
+    img.src = m.body;
+    img.alt = "Shared photo";
+    img.className = "msg-image";
+    img.addEventListener("click", () => window.open(m.body, "_blank"));
+    div.appendChild(img);
+  } else {
+    div.appendChild(document.createTextNode(m.body || ""));
+  }
   if (m.createdAt) {
     const ts = document.createElement("span");
     ts.className = "ts";
     ts.textContent = timeAgo(m.createdAt);
     div.appendChild(ts);
   }
-  box.appendChild(div);
+  return div;
+}
+function appendMessage(m) {
+  state.chatMessagesCache.push(m);
+  const box = qs("messages");
+  if (!messageMatchesSearch(m)) return;
+  box.appendChild(buildMessageNode(m));
+  box.scrollTop = box.scrollHeight;
+}
+function rerenderChatMessages() {
+  const box = qs("messages");
+  box.innerHTML = "";
+  state.chatMessagesCache.filter(messageMatchesSearch).forEach((m) => box.appendChild(buildMessageNode(m)));
   box.scrollTop = box.scrollHeight;
 }
 
@@ -1224,6 +1323,9 @@ async function openChat(matchId) {
   const match = state.matches.find((m) => m.id === matchId);
   if (!match || !match.conversation) return;
   state.activeMatch = match;
+  state.chatMessagesCache = [];
+  state.chatSearchQuery = "";
+  qs("chatSearchInput").value = "";
   qs("chatTitle").textContent = `${match.other?.fullName || "Chat"}`;
   qs("bookCallBtn").hidden = !match.other?.profile?.calLink;
   qs("bookCallBtn").onclick = () => window.open(match.other.profile.calLink, "_blank");
@@ -1284,10 +1386,40 @@ qs("chatInput").addEventListener("input", () => {
   if (state.ws?.readyState !== 1 || !state.activeMatch?.conversation) return;
   state.ws.send(JSON.stringify({ type: "typing", conversationId: state.activeMatch.conversation.id, toUserId: state.activeMatch.other.id }));
 });
-qs("requestVideoBtn").addEventListener("click", async () => {
+// Photo attachments in chat. Uploads via /upload (cloud when configured,
+// echoes a base64 data URL in dev) then sends a kind="image" message whose
+// body is the URL.
+qs("chatPhotoInput").addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = "";
+  if (!file) return;
+  if (file.size > 4 * 1024 * 1024) return alert("Photo too large (max 4MB).");
   if (!state.activeMatch?.conversation) return;
-  await api(`/messages/${state.activeMatch.conversation.id}`, { method: "POST", body: JSON.stringify({ body: "🎥 Requested a video call. Pick a time?", kind: "video_request" }) });
-  showToast("Video call request sent");
+  const dataUrl = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+  try {
+    const up = await api("/upload", { method: "POST", body: JSON.stringify({ dataUrl, folder: "chat" }) });
+    const convoId = state.activeMatch.conversation.id;
+    const toUserId = state.activeMatch.other.id;
+    if (state.ws?.readyState === 1) {
+      state.ws.send(JSON.stringify({ type: "send_message", conversationId: convoId, toUserId, body: up.url, kind: "image" }));
+      appendMessage({ senderId: state.user.id, body: up.url, kind: "image", conversationId: convoId, createdAt: new Date().toISOString() });
+    } else {
+      const saved = await api(`/messages/${convoId}`, { method: "POST", body: JSON.stringify({ body: up.url, kind: "image" }) });
+      appendMessage(saved);
+    }
+  } catch (err) {
+    alert(`Couldn't send photo: ${err.message}`);
+  }
+});
+
+qs("chatSearchInput").addEventListener("input", (e) => {
+  state.chatSearchQuery = e.target.value.trim().toLowerCase();
+  rerenderChatMessages();
 });
 
 // ---------- swipe buttons / filters / search ----------
@@ -1344,29 +1476,39 @@ function renderActiveFilterChips() {
   if (state.filters.stage) active.push({ key: "stage", label: state.filters.stage });
   if (state.filters.lookingFor) active.push({ key: "lookingFor", label: state.filters.lookingFor });
   if (state.filters.industry && state.filters.industry !== "all") active.push({ key: "industry", label: state.filters.industry });
-  chipRow.innerHTML = active.map((a) => `<span class="filter-chip">${a.label}<button type="button" data-filter="${a.key}" aria-label="Remove filter ${a.label}">✕</button></span>`).join("");
+  if (state.filters.maxKm) active.push({ key: "maxKm", label: `≤ ${state.filters.maxKm} km` });
+  chipRow.innerHTML = active.map((a) => `<span class="filter-chip">${esc(a.label)}<button type="button" data-filter="${a.key}" aria-label="Remove filter">✕</button></span>`).join("");
   chipRow.querySelectorAll("button[data-filter]").forEach((b) =>
     b.addEventListener("click", () => {
       const k = b.dataset.filter;
       state.filters[k] = k === "industry" ? "all" : "";
-      qs(k === "industry" ? "industryFilter" : k === "stage" ? "filterStage" : "filterLookingFor").value = k === "industry" ? "all" : "";
+      const selectId = k === "industry" ? "industryFilter"
+        : k === "stage" ? "filterStage"
+        : k === "maxKm" ? "filterDistance"
+        : "filterLookingFor";
+      qs(selectId).value = k === "industry" ? "all" : "";
       renderActiveFilterChips();
       loadDiscover();
     }),
   );
 }
 
-["filterStage", "filterLookingFor", "industryFilter"].forEach((id) => {
+["filterStage", "filterLookingFor", "industryFilter", "filterDistance"].forEach((id) => {
   qs(id).addEventListener("change", (e) => {
-    const key = id === "industryFilter" ? "industry" : id === "filterStage" ? "stage" : "lookingFor";
+    const key = id === "industryFilter" ? "industry"
+      : id === "filterStage" ? "stage"
+      : id === "filterDistance" ? "maxKm"
+      : "lookingFor";
     state.filters[key] = e.target.value;
     renderActiveFilterChips();
     loadDiscover();
   });
 });
 qs("emptyResetBtn").addEventListener("click", () => {
-  state.filters = { stage: "", lookingFor: "", industry: "all" };
-  qs("filterStage").value = ""; qs("filterLookingFor").value = ""; qs("industryFilter").value = "all";
+  state.filters = { stage: "", lookingFor: "", industry: "all", maxKm: "" };
+  qs("filterStage").value = ""; qs("filterLookingFor").value = "";
+  qs("industryFilter").value = "all"; qs("filterDistance").value = "";
+  renderActiveFilterChips();
   loadDiscover();
 });
 qs("viewToggle").addEventListener("click", () => switchView(state.view === "cards" ? "grid" : "cards"));
@@ -1394,10 +1536,17 @@ qs("searchInput").addEventListener("input", (e) => {
 // Tabs (bottom nav)
 document.querySelectorAll(".tab").forEach((btn) =>
   btn.addEventListener("click", () => {
+    if (btn.dataset.view === "onboarding" && state.profile) {
+      // Entering "Profile" with an existing profile means edit mode.
+      enterProfileEditor();
+      return;
+    }
     show(btn.dataset.view);
     if (btn.dataset.view === "matches") { loadMatches(); loadSaved(); loadLikedYou(); loadViewedYou(); }
   }),
 );
+
+qs("editProfileBtn").addEventListener("click", enterProfileEditor);
 
 // Tabs (within matches)
 document.querySelectorAll(".tab-btn").forEach((btn) =>
@@ -1463,6 +1612,68 @@ qs("manageBlocksBtn").addEventListener("click", async () => {
     wrap.hidden = false;
   } catch (e) { alert(e.message); }
 });
+qs("verifyResendBtn").addEventListener("click", async () => {
+  try {
+    const r = await api("/auth/resend-verify", { method: "POST" });
+    if (r.alreadyVerified) { showToast("Already verified"); updateChrome(); return; }
+    if (r.verifyUrl) {
+      state.pendingVerifyUrl = r.verifyUrl;
+      updateChrome();
+    }
+    showToast(r.verifyUrl ? "Verification link ready" : "Verification email sent");
+  } catch (e) { showToast(e.message); }
+});
+
+qs("adminOpenBtn").addEventListener("click", openAdminModal);
+qs("adminCloseBtn").addEventListener("click", () => closeModal(qs("adminModal")));
+
+async function openAdminModal() {
+  const modal = qs("adminModal");
+  const body = qs("adminQueueBody");
+  body.innerHTML = `<p class="hint">Loading…</p>`;
+  openModal(modal);
+  try {
+    const q = await api("/admin/queue");
+    body.innerHTML = "";
+    const usersTitle = document.createElement("h3");
+    usersTitle.textContent = `Recent signups (${q.recentUsers?.length || 0})`;
+    body.appendChild(usersTitle);
+    (q.recentUsers || []).slice(0, 20).forEach((u) => {
+      const row = document.createElement("div");
+      row.className = "admin-row";
+      row.innerHTML = `<div><strong></strong><div class="settings-sub"></div></div><button class="ghost" type="button"></button>`;
+      row.querySelector("strong").textContent = u.fullName || u.email;
+      row.querySelector(".settings-sub").textContent = `${u.email}${u.emailVerified ? " · email ✓" : ""}${u.verified ? " · verified ✓" : ""}`;
+      const btn = row.querySelector("button");
+      btn.textContent = u.verified ? "Unverify" : "Verify";
+      btn.addEventListener("click", async () => {
+        try {
+          await api("/admin/verify", { method: "POST", body: JSON.stringify({ userId: u.id, verified: !u.verified }) });
+          u.verified = !u.verified;
+          btn.textContent = u.verified ? "Unverify" : "Verify";
+          showToast(u.verified ? "Verified" : "Unverified");
+        } catch (e) { alert(e.message); }
+      });
+      body.appendChild(row);
+    });
+    const reportsTitle = document.createElement("h3");
+    reportsTitle.textContent = `Reports (${q.reports?.length || 0})`;
+    reportsTitle.style.marginTop = "12px";
+    body.appendChild(reportsTitle);
+    (q.reports || []).slice(0, 20).forEach((r) => {
+      const div = document.createElement("div");
+      div.className = "admin-row";
+      div.innerHTML = `<div><strong></strong><div class="settings-sub"></div></div>`;
+      div.querySelector("strong").textContent = `Report on user ${r.targetId.slice(0, 8)}…`;
+      div.querySelector(".settings-sub").textContent = r.reason || "(no reason)";
+      body.appendChild(div);
+    });
+    if (!q.recentUsers?.length && !q.reports?.length) body.innerHTML = `<p class="hint">Queue empty.</p>`;
+  } catch (e) {
+    body.innerHTML = `<p class="hint">${esc(e.message)}</p>`;
+  }
+}
+
 qs("planBadge").addEventListener("click", () => openModal(qs("proModal")));
 qs("upgradeBtn").addEventListener("click", () => openModal(qs("proModal")));
 qs("proCloseBtn").addEventListener("click", () => closeModal(qs("proModal")));
@@ -1559,7 +1770,7 @@ function setupPullToRefresh() {
 
 async function boot() {
   enforceChipMax();
-  ["matchModal", "proModal", "detailModal"].forEach((id) => wireModal(qs(id)));
+  ["matchModal", "proModal", "detailModal", "adminModal"].forEach((id) => wireModal(qs(id)));
   setupPullToRefresh();
   await Promise.all([setupGoogle(), fetchPrompts()]);
   if (state.token) {

@@ -545,6 +545,60 @@ input:focus, textarea:focus, select:focus {
 .filter-chip { background: var(--brand-soft); color: var(--text); border: 1px solid rgba(124, 92, 255, 0.4); border-radius: 999px; padding: 4px 10px; font-size: .76rem; display: inline-flex; align-items: center; gap: 6px; }
 .filter-chip button { background: transparent; border: 0; color: var(--muted); padding: 0 0 0 4px; cursor: pointer; }
 
+/* ---------- Chat: attachments + search ---------- */
+.chat-actions { flex-wrap: wrap; }
+.chat-attach { flex: 0 0 auto; cursor: pointer; display: inline-flex; align-items: center; padding: 8px 12px; border-radius: 10px; background: rgba(255,255,255,0.06); border: 1px solid var(--border-strong); color: var(--text-2); font-size: 0.84rem; }
+.chat-attach:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+.chat-search-wrap { flex: 1 1 160px; display: flex; }
+.chat-search-wrap input { flex: 1; padding: 8px 12px; border-radius: 10px; background: rgba(255,255,255,0.04); border: 1px solid var(--border-strong); color: var(--text); }
+.msg-image { display: block; max-width: 220px; max-height: 280px; border-radius: 12px; margin: 2px 0; cursor: zoom-in; }
+.msg.me .msg-image { box-shadow: 0 6px 20px rgba(0,0,0,0.35); }
+
+/* ---------- Free-tier liker reveal ---------- */
+.silhouette-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr)); gap: 8px; margin: 10px 0; }
+.silhouette {
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  background: linear-gradient(140deg, rgba(124, 92, 255, 0.35), rgba(255, 92, 200, 0.25));
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,0.55); font-weight: 700; font-size: 1.1rem;
+  border: 1px solid rgba(255,255,255,0.08);
+  filter: blur(0.4px);
+}
+.reveal-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.reveal-actions button { width: 100%; }
+.reveal-actions button[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Edit mode banner ---------- */
+.edit-banner {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  background: rgba(124, 92, 255, 0.14); border: 1px solid rgba(124, 92, 255, 0.4);
+  border-radius: 12px; padding: 8px 12px; margin-bottom: 12px;
+  font-size: 0.88rem; color: var(--text);
+}
+.edit-banner .ghost { padding: 6px 12px; }
+
+/* ---------- Photo upload pending state ---------- */
+.photo-add.uploading {
+  opacity: 0.6; pointer-events: none;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.9; }
+}
+
+/* ---------- Admin queue ---------- */
+.admin-queue { display: grid; gap: 10px; max-height: 60dvh; overflow: auto; margin: 10px 0; }
+.admin-queue h3 { font-size: 0.9rem; color: var(--text-2); margin: 6px 0; }
+.admin-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-strong);
+  border-radius: 12px; padding: 9px 11px;
+}
+.admin-row strong { font-size: 0.92rem; }
+.admin-row .ghost { flex: 0 0 auto; padding: 6px 10px; font-size: 0.82rem; }
+
 /* ---------- Misc ---------- */
 .center { text-align: center; }
 code { font-family: ui-monospace, monospace; background: rgba(255, 255, 255, 0.06); padding: 2px 6px; border-radius: 6px; font-size: 0.86rem; }

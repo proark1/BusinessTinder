@@ -119,8 +119,12 @@
           </ul>
         </section>
 
-        <!-- ========== ONBOARDING WIZARD ========== -->
+        <!-- ========== ONBOARDING WIZARD / PROFILE EDITOR ========== -->
         <section id="view-onboarding" class="view glass pad">
+          <div id="editModeBanner" class="edit-banner" hidden>
+            <span>Editing your profile</span>
+            <button type="button" id="editCancelBtn" class="ghost">Cancel</button>
+          </div>
           <div class="wizard-progress">
             <span class="active" data-step-bar="1"></span>
             <span data-step-bar="2"></span>
@@ -259,7 +263,8 @@
         <section id="view-swipe" class="view">
           <div id="verifyBanner" class="verify-banner" hidden>
             <span>📩 Verify your email to unlock matching.</span>
-            <button type="button" id="verifyDevLinkBtn" class="ghost">Open link</button>
+            <button type="button" id="verifyResendBtn" class="ghost">Resend</button>
+            <button type="button" id="verifyDevLinkBtn" class="ghost" hidden>Open link</button>
           </div>
           <div class="filters glass pad-sm">
             <div class="filter-row">
@@ -296,6 +301,14 @@
                 <option value="Marketplace">Marketplace</option>
                 <option value="B2B SaaS">B2B SaaS</option>
                 <option value="Web3">Web3</option>
+              </select>
+              <select id="filterDistance" aria-label="Maximum distance">
+                <option value="">Any distance</option>
+                <option value="10">Within 10 km</option>
+                <option value="25">Within 25 km</option>
+                <option value="50">Within 50 km</option>
+                <option value="100">Within 100 km</option>
+                <option value="500">Within 500 km</option>
               </select>
             </div>
             <p id="quotaText" class="quota" hidden></p>
@@ -352,10 +365,14 @@
           <p id="typingIndicator" class="typing" hidden>typing…</p>
           <div id="chatActions" class="chat-actions">
             <button id="bookCallBtn" class="ghost" type="button" hidden>📅 Book a call</button>
-            <button id="requestVideoBtn" class="ghost" type="button">🎥 Request video</button>
+            <label class="ghost chat-attach" for="chatPhotoInput" title="Send a photo">📎 Photo</label>
+            <input id="chatPhotoInput" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+            <span id="chatSearchWrap" class="chat-search-wrap">
+              <input id="chatSearchInput" type="search" placeholder="Search messages…" />
+            </span>
           </div>
           <form id="chatForm" class="chat-form">
-            <input id="chatInput" placeholder="Type a message" />
+            <input id="chatInput" placeholder="Type a message" autocomplete="off" />
             <button class="primary" type="submit">Send</button>
           </form>
         </section>
@@ -366,10 +383,11 @@
 
           <div class="completion-card">
             <div class="completion-ring" id="completionRing" style="--p:0;"><span id="completionPct">0%</span></div>
-            <div>
+            <div style="flex:1;">
               <div class="settings-label" style="font-size:1rem;">Profile completion</div>
               <p class="settings-sub" id="completionTip">Add a photo and a couple of prompts to get 4× more views.</p>
             </div>
+            <button id="editProfileBtn" class="ghost" type="button" style="flex:0 0 auto;">Edit</button>
           </div>
 
           <div class="settings-row">
@@ -419,6 +437,13 @@
               <div class="settings-sub" id="blockedSummary">Manage who can't see or message you.</div>
             </div>
             <button id="manageBlocksBtn" class="ghost" type="button">Manage</button>
+          </div>
+          <div class="settings-row" id="adminRow" hidden>
+            <div>
+              <div class="settings-label">Admin</div>
+              <div class="settings-sub">Review reports &amp; verify users</div>
+            </div>
+            <button id="adminOpenBtn" class="ghost" type="button">Open</button>
           </div>
           <div id="blockedListWrap" hidden style="margin-top:8px;">
             <ul id="blockedList" class="list"></ul>
@@ -509,6 +534,16 @@
         <button class="detail-close" id="detailCloseBtn" type="button">✕</button>
         <div class="detail-gallery" id="detailGallery"></div>
         <div class="detail-body" id="detailBody"></div>
+      </div>
+    </div>
+
+    <!-- Admin modal -->
+    <div id="adminModal" class="modal" hidden role="dialog" aria-modal="true">
+      <div class="modal-card glass pad" style="max-width:520px;">
+        <h2>Admin queue</h2>
+        <p class="hint">Recent reports and signups. Verify trusted users to give them the ✓ badge.</p>
+        <div id="adminQueueBody" class="admin-queue"></div>
+        <button class="ghost" id="adminCloseBtn" type="button">Close</button>
       </div>
     </div>
 

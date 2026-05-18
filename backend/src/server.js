@@ -124,6 +124,7 @@ const wsClients = new Map(); // userId -> Set<WebSocket>
 // `${recipientId}:${conversationId}`, value is the timestamp of the last
 // email. We only email once per hour per thread so users don't get
 // hammered when a conversation is active but they happen to be offline.
+// A periodic sweep keeps the map from growing unbounded over time.
 const MSG_EMAIL_THROTTLE_MS = 60 * 60_000;
 const lastMessageEmail = new Map();
 function shouldEmailMessage(recipientId, conversationId) {
@@ -133,6 +134,12 @@ function shouldEmailMessage(recipientId, conversationId) {
   lastMessageEmail.set(key, Date.now());
   return true;
 }
+// Drop expired entries every 10 minutes — entries older than the throttle
+// window are no longer affecting any decision so they can safely go.
+setInterval(() => {
+  const cutoff = Date.now() - MSG_EMAIL_THROTTLE_MS;
+  for (const [k, t] of lastMessageEmail) if (t < cutoff) lastMessageEmail.delete(k);
+}, 10 * 60_000).unref?.();
 
 const BOOST_DURATION_MS = 30 * 60_000;
 function isBoostActive(user) {
@@ -766,8 +773,9 @@ app.get('/discover', auth, async (req, res) => {
       });
       boosted.forEach((u) => activeBoostSet.add(u.id));
     } else {
+      const idSet = new Set(candidateIds);
       mem.users
-        .filter((u) => candidateIds.includes(u.id) && isBoostActive(u))
+        .filter((u) => idSet.has(u.id) && isBoostActive(u))
         .forEach((u) => activeBoostSet.add(u.id));
     }
   }
@@ -1472,8 +1480,12 @@ app.delete('/matches/:matchId', auth, async (req, res) => {
     if (match.userAId !== me && match.userBId !== me) return res.status(403).json({ error: 'Not your match' });
     // Conversation → messages cascades via the FK; the match→conversation
     // link is not declared as a cascade in the schema so we delete by hand.
-    await prisma.conversation.deleteMany({ where: { matchId } });
-    await prisma.match.delete({ where: { id: matchId } });
+    // Wrap both deletes in a transaction so we never leave an orphaned
+    // conversation if the match delete fails partway.
+    await prisma.$transaction([
+      prisma.conversation.deleteMany({ where: { matchId } }),
+      prisma.match.delete({ where: { id: matchId } }),
+    ]);
     return res.json({ ok: true });
   }
   const match = mem.matches.find((m) => m.id === matchId);

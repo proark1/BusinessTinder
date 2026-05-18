@@ -1637,12 +1637,19 @@ qs("unmatchBtn").addEventListener("click", async () => {
 });
 
 let boostCountdownTimer = null;
+let boostRequestSeq = 0;
 async function refreshBoostStatus() {
   const btn = qs("boostBtn");
   const status = qs("boostStatus");
+  // Token every call. After the await, if a newer call has started we
+  // bail out — its result will overwrite ours anyway and we'd otherwise
+  // leak a setInterval or render stale UI.
+  const seq = ++boostRequestSeq;
   try {
     const s = await api("/boost/status");
+    if (seq !== boostRequestSeq) return;
     clearInterval(boostCountdownTimer);
+    boostCountdownTimer = null;
     if (!s.isPro) {
       btn.textContent = "Pro only";
       btn.disabled = true;

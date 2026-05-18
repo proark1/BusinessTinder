@@ -1,5 +1,16 @@
 const API_BASE = location.origin;
 const TOKEN_KEY = "bt_token";
+const THEME_KEY = "bt_theme"; // "auto" | "light" | "dark"
+
+// Apply the saved theme before anything renders so we don't flash the wrong one.
+(function applyInitialTheme() {
+  const saved = localStorage.getItem(THEME_KEY) || "auto";
+  if (saved === "light" || saved === "dark") {
+    document.documentElement.setAttribute("data-theme", saved);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+})();
 
 const qs = (id) => document.getElementById(id);
 const deck = qs("deck");
@@ -1580,6 +1591,28 @@ qs("logoutBtn").addEventListener("click", logout);
 qs("topbarLogoutBtn").addEventListener("click", () => {
   if (confirm("Log out?")) logout();
 });
+
+// Theme picker: auto / light / dark, persisted in localStorage and applied
+// to <html data-theme>. "auto" lets prefers-color-scheme decide.
+function applyTheme(choice) {
+  if (choice === "light" || choice === "dark") {
+    document.documentElement.setAttribute("data-theme", choice);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+  localStorage.setItem(THEME_KEY, choice);
+  document.querySelectorAll(".theme-picker button[data-theme-pick]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.themePick === choice);
+  });
+}
+function currentTheme() {
+  return localStorage.getItem(THEME_KEY) || "auto";
+}
+document.querySelectorAll(".theme-picker button[data-theme-pick]").forEach((btn) => {
+  btn.addEventListener("click", () => applyTheme(btn.dataset.themePick));
+});
+// Initialize the picker's active state to whatever's stored.
+applyTheme(currentTheme());
 
 qs("deleteAccountBtn").addEventListener("click", async () => {
   if (!confirm("Permanently delete your account and all your data? This cannot be undone.")) return;

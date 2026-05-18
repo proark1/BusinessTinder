@@ -21,8 +21,8 @@
         <div class="topbar-actions">
           <button id="likedBadge" class="liked-badge" hidden>♥ <span id="likedCount">0</span></button>
           <button id="planBadge" class="plan-badge ghost" hidden>FREE</button>
-          <button id="settingsBtn" class="ghost" aria-label="Settings">⚙</button>
-          <button id="topbarLogoutBtn" class="ghost" aria-label="Log out" title="Log out">⎋</button>
+          <button id="settingsBtn" class="ghost" aria-label="Settings" title="Settings">⚙</button>
+          <button id="topbarLogoutBtn" class="ghost" aria-label="Log out" title="Log out">Log out</button>
         </div>
       </header>
 
@@ -392,6 +392,18 @@
               <p class="settings-sub" id="completionTip">Add a photo and a couple of prompts to get 4× more views.</p>
             </div>
             <button id="editProfileBtn" class="ghost" type="button" style="flex:0 0 auto;">Edit</button>
+          </div>
+
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Appearance</div>
+              <div class="settings-sub">Match your system or pick a theme</div>
+            </div>
+            <div class="theme-picker" role="group" aria-label="Theme">
+              <button type="button" data-theme-pick="auto" class="active">Auto</button>
+              <button type="button" data-theme-pick="light">Light</button>
+              <button type="button" data-theme-pick="dark">Dark</button>
+            </div>
           </div>
 
           <div class="settings-row">

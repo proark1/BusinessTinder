@@ -13,7 +13,7 @@ import { moderateText } from './moderation.js';
 import { suggestIcebreakers } from './icebreakers.js';
 import { rateLimit } from './rateLimit.js';
 import { PROMPTS, normalizePrompts, mutualHighlights } from './prompts.js';
-import { sendVerifyEmail, sendResetEmail, sendMatchEmail, HAS_EMAIL } from './email.js';
+import { sendVerifyEmail, sendResetEmail, sendMatchEmail, sendMessageDigestEmail, HAS_EMAIL } from './email.js';
 import { geocode, distanceKm, normalizeLocation } from './geocode.js';
 import { uploadDataUrl, HAS_CLOUD_UPLOAD } from './upload.js';
 import { isDisposableEmail } from './disposable.js';
@@ -119,6 +119,25 @@ const mem = {
   profileViews: [],
 };
 const wsClients = new Map(); // userId -> Set<WebSocket>
+
+// In-memory throttle for "you have a new message" digest emails. Key is
+// `${recipientId}:${conversationId}`, value is the timestamp of the last
+// email. We only email once per hour per thread so users don't get
+// hammered when a conversation is active but they happen to be offline.
+const MSG_EMAIL_THROTTLE_MS = 60 * 60_000;
+const lastMessageEmail = new Map();
+function shouldEmailMessage(recipientId, conversationId) {
+  const key = `${recipientId}:${conversationId}`;
+  const last = lastMessageEmail.get(key) || 0;
+  if (Date.now() - last < MSG_EMAIL_THROTTLE_MS) return false;
+  lastMessageEmail.set(key, Date.now());
+  return true;
+}
+
+const BOOST_DURATION_MS = 30 * 60_000;
+function isBoostActive(user) {
+  return !!(user?.boostUntil && new Date(user.boostUntil).getTime() > Date.now());
+}
 
 function addWsClient(userId, ws) {
   if (!wsClients.has(userId)) wsClients.set(userId, new Set());
@@ -724,7 +743,7 @@ app.get('/discover', auth, async (req, res) => {
     if (filters.location) filtered = filtered.filter((p) => (p.location || '').toLowerCase().includes(filters.location));
   }
 
-  // Boost: anyone who SUPER_LIKEd the current user jumps to the top.
+  // Boost slot 1: anyone who SUPER_LIKEd the current user jumps to the top.
   let superLikers;
   if (prisma) {
     superLikers = await prisma.swipe.findMany({
@@ -733,7 +752,25 @@ app.get('/discover', auth, async (req, res) => {
   } else {
     superLikers = mem.swipes.filter((s) => s.toUserId === mine && s.direction === 'SUPER_LIKE');
   }
-  const boostSet = new Set(superLikers.map((s) => s.fromUserId));
+  const superLikerSet = new Set(superLikers.map((s) => s.fromUserId));
+
+  // Boost slot 2: users with an active boost window get ranked above normal
+  // but below super-likers. Look up each candidate profile owner's boostUntil.
+  const candidateIds = filtered.map((p) => p.userId);
+  const activeBoostSet = new Set();
+  if (candidateIds.length) {
+    if (prisma) {
+      const boosted = await prisma.user.findMany({
+        where: { id: { in: candidateIds }, boostUntil: { gt: new Date() } },
+        select: { id: true },
+      });
+      boosted.forEach((u) => activeBoostSet.add(u.id));
+    } else {
+      mem.users
+        .filter((u) => candidateIds.includes(u.id) && isBoostActive(u))
+        .forEach((u) => activeBoostSet.add(u.id));
+    }
+  }
 
   // Distance filter + per-profile distanceKm enrichment. Skipped silently
   // when either side hasn't been geocoded — text/remote-OK signals still
@@ -750,11 +787,11 @@ app.get('/discover', auth, async (req, res) => {
   }
 
   const ranked = diversify(rankProfiles(meProfile, filtered));
+  const tier = (id) => (superLikerSet.has(id) ? 2 : activeBoostSet.has(id) ? 1 : 0);
   ranked.sort((a, b) => {
-    const aB = boostSet.has(a.profile.userId) ? 1 : 0;
-    const bB = boostSet.has(b.profile.userId) ? 1 : 0;
-    if (aB !== bB) return bB - aB;
-    return 0; // preserve ranked order
+    const t = tier(b.profile.userId) - tier(a.profile.userId);
+    if (t !== 0) return t;
+    return 0; // preserve ranked order within a tier
   });
   const out = ranked.map(({ profile, score, reasons }) => {
     const km = meGeo && profile.latitude != null && profile.longitude != null
@@ -766,7 +803,8 @@ app.get('/discover', auth, async (req, res) => {
       matchScore: score,
       matchReasons: reasons,
       mutualHighlights: mutualHighlights(meProfile, profile),
-      superLikedYou: boostSet.has(profile.userId),
+      superLikedYou: superLikerSet.has(profile.userId),
+      boosted: activeBoostSet.has(profile.userId),
       distanceKm: km != null ? Math.round(km) : null,
     };
   });
@@ -1389,6 +1427,65 @@ app.post('/plan/upgrade', auth, async (req, res) => {
   res.json({ ok: true, planTier: 'PRO' });
 });
 
+// Boost: Pro-only top-of-deck placement for 30 minutes. One per day.
+app.post('/boost', auth, limits.general, async (req, res) => {
+  const me = await findUserById(req.user.userId);
+  if (!me) return res.status(404).json({ error: 'User not found' });
+  if (effectivePlanTier(me) !== 'PRO') {
+    return res.status(402).json({ error: 'Boost is a Pro feature.' });
+  }
+  const today = todayKey();
+  if (me.lastBoostDay === today) {
+    return res.status(429).json({ error: 'You already used your boost today. Come back tomorrow.' });
+  }
+  const boostUntil = new Date(Date.now() + BOOST_DURATION_MS);
+  if (prisma) {
+    await prisma.user.update({ where: { id: me.id }, data: { boostUntil, lastBoostDay: today } });
+  } else {
+    me.boostUntil = boostUntil.toISOString();
+    me.lastBoostDay = today;
+  }
+  res.json({ ok: true, boostUntil, durationMs: BOOST_DURATION_MS });
+});
+
+app.get('/boost/status', auth, async (req, res) => {
+  const me = await findUserById(req.user.userId);
+  const active = isBoostActive(me);
+  const today = todayKey();
+  res.json({
+    active,
+    boostUntil: active ? me.boostUntil : null,
+    usedToday: me?.lastBoostDay === today,
+    isPro: effectivePlanTier(me) === 'PRO',
+  });
+});
+
+// Unmatch: remove the match, conversation, messages between the current
+// user and the other side. Does not block — they can still re-discover
+// each other unless one of them blocks explicitly.
+app.delete('/matches/:matchId', auth, async (req, res) => {
+  const me = req.user.userId;
+  const { matchId } = req.params;
+  if (prisma) {
+    const match = await prisma.match.findUnique({ where: { id: matchId } });
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (match.userAId !== me && match.userBId !== me) return res.status(403).json({ error: 'Not your match' });
+    // Conversation → messages cascades via the FK; the match→conversation
+    // link is not declared as a cascade in the schema so we delete by hand.
+    await prisma.conversation.deleteMany({ where: { matchId } });
+    await prisma.match.delete({ where: { id: matchId } });
+    return res.json({ ok: true });
+  }
+  const match = mem.matches.find((m) => m.id === matchId);
+  if (!match) return res.status(404).json({ error: 'Match not found' });
+  if (match.userAId !== me && match.userBId !== me) return res.status(403).json({ error: 'Not your match' });
+  const convIds = new Set(mem.conversations.filter((c) => c.matchId === matchId).map((c) => c.id));
+  mem.conversations = mem.conversations.filter((c) => c.matchId !== matchId);
+  mem.messages = mem.messages.filter((m) => !convIds.has(m.conversationId));
+  mem.matches = mem.matches.filter((m) => m.id !== matchId);
+  res.json({ ok: true });
+});
+
 app.post('/referrals/redeem', auth, async (req, res) => {
   const { code } = req.body || {};
   if (!code) return res.status(400).json({ error: 'code required' });
@@ -1655,7 +1752,18 @@ wss.on('connection', (ws, req) => {
         ws.send(JSON.stringify({ type: 'message_ack', messageId: saved.id, status: 'DELIVERED' }));
         const preview = safeKind === 'image' ? '📷 Photo' : String(body).slice(0, 80);
         const delivered = sendToUser(toUserId, { type: 'message', message: saved });
-        if (!delivered) pushToUser(toUserId, { title: 'New message', body: preview });
+        if (!delivered) {
+          pushToUser(toUserId, { title: 'New message', body: preview });
+          // Email digest fallback when recipient isn't online — throttled
+          // per conversation so an active thread doesn't spam them.
+          if (shouldEmailMessage(toUserId, conversationId)) {
+            const recipient = await findUserById(toUserId);
+            const sender = await findUserById(userId);
+            if (recipient?.email && sender) {
+              sendMessageDigestEmail(recipient.email, recipient.fullName, sender.fullName, preview).catch(() => {});
+            }
+          }
+        }
       }
 
       if (data.type === 'typing') {

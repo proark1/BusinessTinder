@@ -279,6 +279,12 @@ function renderCard(p, index, total) {
     sl.textContent = "★ SUPER-LIKED YOU";
     node.appendChild(sl);
   }
+  if (p.boosted) {
+    const b = document.createElement("div");
+    b.className = "boost-badge";
+    b.textContent = "⚡ Boosted";
+    node.appendChild(b);
+  }
   if (p.verified) {
     const h2 = node.querySelector("h2");
     const span = document.createElement("span");
@@ -1153,6 +1159,8 @@ function updateChrome() {
   }
   // Admin entry
   qs("adminRow").hidden = !state.user?.isAdmin;
+  // Boost row state (Pro only, ticking countdown when active)
+  refreshBoostStatus();
   // Auto-detect ?verified=1 redirect from email link
   if (new URLSearchParams(location.search).get("verified") === "1") {
     showToast("Email verified ✓");
@@ -1612,6 +1620,76 @@ qs("manageBlocksBtn").addEventListener("click", async () => {
     wrap.hidden = false;
   } catch (e) { alert(e.message); }
 });
+qs("unmatchBtn").addEventListener("click", async () => {
+  if (!state.activeMatch?.id) return;
+  const name = state.activeMatch.other?.fullName || "this person";
+  if (!confirm(`Unmatch ${name}? This deletes the conversation.`)) return;
+  try {
+    await api(`/matches/${state.activeMatch.id}`, { method: "DELETE" });
+    state.activeMatch = null;
+    state.chatMessagesCache = [];
+    showToast("Unmatched");
+    await loadMatches();
+    show("matches");
+  } catch (e) {
+    alert(e.message);
+  }
+});
+
+let boostCountdownTimer = null;
+async function refreshBoostStatus() {
+  const btn = qs("boostBtn");
+  const status = qs("boostStatus");
+  try {
+    const s = await api("/boost/status");
+    clearInterval(boostCountdownTimer);
+    if (!s.isPro) {
+      btn.textContent = "Pro only";
+      btn.disabled = true;
+      btn.classList.remove("active");
+      status.textContent = "Pro-only · jump to the top of decks for 30 min, once a day";
+      return;
+    }
+    if (s.active) {
+      btn.classList.add("active");
+      btn.disabled = true;
+      btn.textContent = "Boosted";
+      const tick = () => {
+        const left = new Date(s.boostUntil).getTime() - Date.now();
+        if (left <= 0) {
+          clearInterval(boostCountdownTimer);
+          refreshBoostStatus();
+          return;
+        }
+        const m = Math.floor(left / 60_000);
+        const sec = Math.floor((left % 60_000) / 1000);
+        status.textContent = `Boosted — ${m}m ${String(sec).padStart(2, "0")}s left at the top of decks`;
+      };
+      tick();
+      boostCountdownTimer = setInterval(tick, 1000);
+      return;
+    }
+    btn.classList.remove("active");
+    btn.disabled = !!s.usedToday;
+    btn.textContent = s.usedToday ? "Used today" : "Boost · 30 min";
+    status.textContent = s.usedToday
+      ? "Boost used today. Comes back tomorrow."
+      : "Tap to spend your daily boost — 30 min at the top of others' decks.";
+  } catch {
+    /* boost is non-critical UI */
+  }
+}
+qs("boostBtn").addEventListener("click", async () => {
+  try {
+    await api("/boost", { method: "POST" });
+    showToast("Boost activated · 30 min at the top");
+    refreshBoostStatus();
+  } catch (e) {
+    if (e.status === 402) openModal(qs("proModal"));
+    else showToast(e.message);
+  }
+});
+
 qs("verifyResendBtn").addEventListener("click", async () => {
   try {
     const r = await api("/auth/resend-verify", { method: "POST" });

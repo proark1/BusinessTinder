@@ -17,6 +17,7 @@ import { sendVerifyEmail, sendResetEmail, sendMatchEmail, sendMessageDigestEmail
 import { geocode, distanceKm, normalizeLocation } from './geocode.js';
 import { uploadDataUrl, HAS_CLOUD_UPLOAD } from './upload.js';
 import { isDisposableEmail } from './disposable.js';
+import { FAKE_USERS, FAKE_PASSWORD } from './fakes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -1162,6 +1163,111 @@ app.post('/admin/verify', auth, async (req, res) => {
     if (u) u.verified = !!verified;
   }
   res.json({ ok: true });
+});
+
+// Seed a small cast of demo profiles so the admin can swipe through a varied
+// deck during testing. Idempotent — users whose email already exists are
+// skipped (the existing rows are not modified). Locations are geocoded so
+// distance filters work against the seeded set.
+app.post('/admin/seed-fakes', auth, async (req, res) => {
+  const me = await findUserById(req.user.userId);
+  if (!isAdminUser(me)) return res.status(403).json({ error: 'Admin only' });
+
+  const passwordHash = await bcrypt.hash(FAKE_PASSWORD, 10);
+  let created = 0;
+  let skipped = 0;
+  const errors = [];
+
+  for (const seed of FAKE_USERS) {
+    try {
+      const existing = await findUserByEmail(seed.email);
+      if (existing) { skipped += 1; continue; }
+
+      // Build the user row.
+      let user;
+      if (prisma) {
+        user = await prisma.user.create({
+          data: {
+            email: seed.email,
+            passwordHash,
+            fullName: seed.fullName,
+            emailVerified: true,        // seeded users skip the verify dance
+            verified: false,
+            referralCode: randomCode(8),
+          },
+        });
+      } else {
+        user = {
+          id: crypto.randomUUID(),
+          email: seed.email,
+          passwordHash,
+          fullName: seed.fullName,
+          avatarUrl: null,
+          planTier: 'FREE',
+          referralCode: randomCode(8),
+          referredBy: null,
+          swipesToday: 0,
+          lastSwipeDay: null,
+          emailVerified: true,
+          verificationToken: null,
+          verified: false,
+          lastLikeRevealDay: null,
+          likeRevealsToday: 0,
+          revealedLikerIds: [],
+          createdAt: new Date().toISOString(),
+        };
+        mem.users.push(user);
+      }
+
+      // Geocode the location so distance filters work for these profiles.
+      const point = await geocode(seed.location);
+      const slug = await uniqueSlug(slugify(seed.fullName));
+
+      const profileData = {
+        headline: seed.headline,
+        userType: seed.userType,
+        lookingFor: seed.lookingFor || [],
+        bio: seed.bio,
+        stage: seed.stage,
+        industries: seed.industries || [],
+        skills: seed.skills || [],
+        location: seed.location,
+        remoteOk: !!seed.remoteOk,
+        commitment: seed.commitment || null,
+        pastCompanies: seed.pastCompanies || [],
+        promptIds: seed.promptIds || [],
+        promptAnswers: seed.promptAnswers || [],
+        latitude: point?.lat ?? null,
+        longitude: point?.lng ?? null,
+      };
+
+      if (prisma) {
+        await prisma.profile.create({
+          data: { userId: user.id, slug, ...profileData, lastActiveAt: new Date() },
+        });
+      } else {
+        mem.profiles.push({
+          id: crypto.randomUUID(),
+          userId: user.id,
+          slug,
+          ...profileData,
+          lastActiveAt: new Date().toISOString(),
+        });
+      }
+      created += 1;
+    } catch (err) {
+      console.warn('[seed-fakes] failed for', seed.email, err?.message);
+      errors.push({ email: seed.email, error: err?.message || 'unknown' });
+    }
+  }
+
+  res.json({
+    created,
+    skipped,
+    total: FAKE_USERS.length,
+    errors,
+    credentials: { password: FAKE_PASSWORD, emails: FAKE_USERS.map((u) => u.email) },
+  });
 });
 
 // Tiny admin queue endpoint so reviewers can see pending reports + recent users.

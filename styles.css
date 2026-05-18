@@ -599,6 +599,26 @@ input:focus, textarea:focus, select:focus {
 .admin-row strong { font-size: 0.92rem; }
 .admin-row .ghost { flex: 0 0 auto; padding: 6px 10px; font-size: 0.82rem; }
 
+/* ---------- Chat header (unmatch) ---------- */
+.chat-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.chat-header h2 { margin: 0; }
+.chat-header .ghost { padding: 6px 12px; font-size: 0.82rem; color: #ffd8de; border-color: rgba(255, 101, 121, 0.35); }
+.chat-header .ghost:hover { background: rgba(255, 101, 121, 0.12); }
+
+/* ---------- Boost ---------- */
+.boost-badge {
+  position: absolute; top: 14px; left: 14px; z-index: 5;
+  background: linear-gradient(120deg, #ffb86c, #ff5cc8);
+  color: #1a0f33; font-weight: 800; font-size: 0.7rem; letter-spacing: 0.04em;
+  padding: 4px 10px; border-radius: 999px; text-transform: uppercase;
+  box-shadow: 0 6px 18px rgba(255, 92, 200, 0.4);
+}
+#boostBtn[disabled] { opacity: 0.55; cursor: not-allowed; }
+#boostBtn.active {
+  background: linear-gradient(120deg, #ffb86c, #ff5cc8);
+  color: #1a0f33;
+}
+
 /* ---------- Misc ---------- */
 .center { text-align: center; }
 code { font-family: ui-monospace, monospace; background: rgba(255, 255, 255, 0.06); padding: 2px 6px; border-radius: 6px; font-size: 0.86rem; }

@@ -68,6 +68,18 @@ export async function sendResetEmail(to, name, resetUrl) {
   });
 }
 
+export async function sendMessageDigestEmail(to, name, fromName, preview) {
+  return sendEmail({
+    to,
+    subject: `${fromName} sent you a message on BusinessTinder`,
+    text: `Hi ${name || ''},\n\n${fromName}: ${preview}\n\nOpen the app to reply.\n\n— BusinessTinder`,
+    html: `<p>Hi ${esc(name)},</p>
+      <p><strong>${esc(fromName)}</strong> sent you a message:</p>
+      <blockquote style="margin:0;padding:10px 14px;border-left:3px solid #7c5cff;color:#444;">${esc(preview)}</blockquote>
+      <p>Open the app to reply.</p>`,
+  });
+}
+
 export async function sendMatchEmail(to, name, otherName) {
   return sendEmail({
     to,

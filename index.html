@@ -359,7 +359,10 @@
 
         <!-- ========== CHAT ========== -->
         <section id="view-chat" class="view glass pad">
-          <h2 id="chatTitle">Chat</h2>
+          <div class="chat-header">
+            <h2 id="chatTitle">Chat</h2>
+            <button id="unmatchBtn" class="ghost" type="button" title="Unmatch">Unmatch</button>
+          </div>
           <div id="icebreakerBox" class="icebreakers" hidden></div>
           <div id="messages" class="messages"></div>
           <p id="typingIndicator" class="typing" hidden>typing…</p>
@@ -396,6 +399,13 @@
               <div class="settings-sub" id="settingsPlan">FREE</div>
             </div>
             <button id="upgradeBtn" class="primary" style="width:auto;">Upgrade</button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Boost</div>
+              <div class="settings-sub" id="boostStatus">Pro-only · jump to the top of decks for 30 min, once a day</div>
+            </div>
+            <button id="boostBtn" class="primary" type="button" style="width:auto;">Boost</button>
           </div>
           <div class="settings-row">
             <div>

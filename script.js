@@ -20,6 +20,7 @@ const statusText = qs("statusText");
 const matchesList = qs("matchesList");
 const savedList = qs("savedList");
 const likedYouBox = qs("likedYouBox");
+const historyList = qs("historyList");
 const template = qs("cardTemplate");
 const skeletonTpl = qs("skeletonCard");
 
@@ -31,6 +32,7 @@ const state = {
   index: 0,
   matches: [],
   saved: [],
+  swipeHistoryRemote: [],
   swipeHistory: [],
   activeMatch: null,
   filters: { stage: "", lookingFor: "", industry: "all", maxKm: "" },
@@ -455,6 +457,39 @@ async function loadDiscover() {
   } catch (e) {
     statusText.textContent = e.message;
   }
+}
+
+async function loadSwipeHistory() {
+  try {
+    state.swipeHistoryRemote = await api("/swipes/history");
+    renderSwipeHistory();
+  } catch {}
+}
+
+function renderSwipeHistory() {
+  qs("historyCount").textContent = state.swipeHistoryRemote.length ? ` · ${state.swipeHistoryRemote.length}` : "";
+  historyList.innerHTML = "";
+  if (!state.swipeHistoryRemote.length) {
+    historyList.innerHTML = `<li class="empty"><div class="empty-icon">🕘</div><p>Your recent swipes will show here.</p></li>`;
+    return;
+  }
+  state.swipeHistoryRemote.forEach((h) => {
+    const li = document.createElement("li");
+    li.className = "match-row";
+    const label = h.direction === "RIGHT" ? "Liked" : h.direction === "SUPER_LIKE" ? "Super-liked" : "Passed";
+    const when = h.createdAt ? new Date(h.createdAt).toLocaleString() : "recently";
+    li.innerHTML = `
+      <img alt="" />
+      <div class="match-meta">
+        <div class="match-name"></div>
+        <div class="match-preview"></div>
+      </div>
+      <div class="match-side"><span class="history-pill ${h.direction}">${label}</span><small>${when}</small></div>`;
+    li.querySelector("img").src = h.avatarUrl || avatarFor(h);
+    li.querySelector(".match-name").textContent = h.fullName || "Unknown";
+    li.querySelector(".match-preview").textContent = h.headline || "";
+    historyList.appendChild(li);
+  });
 }
 
 async function loadMatches() {
@@ -966,7 +1001,7 @@ qs("onboardingForm").addEventListener("submit", async (e) => {
     updateChrome();
     show(wasEditing ? "settings" : "swipe");
     if (wasEditing) showToast("Profile saved");
-    await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou(), loadViewedYou()]);
+    await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou(), loadViewedYou(), loadSwipeHistory()]);
   } catch (err) {
     showAuthError("onboardingError", err.message);
   }
@@ -1122,7 +1157,7 @@ async function onAuthSuccess(token, user, profile) {
   connectWebSocket();
   if (state.profile) {
     show("swipe");
-    await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou(), loadViewedYou()]);
+    await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou(), loadViewedYou(), loadSwipeHistory()]);
   } else {
     showWizardStep(1);
     show("onboarding");
@@ -1172,11 +1207,35 @@ function updateChrome() {
   qs("adminRow").hidden = !state.user?.isAdmin;
   // Boost row state (Pro only, ticking countdown when active)
   refreshBoostStatus();
+  loadReadiness();
   // Auto-detect ?verified=1 redirect from email link
   if (new URLSearchParams(location.search).get("verified") === "1") {
     showToast("Email verified ✓");
     state.pendingVerifyUrl = null;
     history.replaceState({}, "", location.pathname);
+  }
+}
+
+
+async function loadReadiness() {
+  const summary = qs("readinessSummary");
+  const list = qs("readinessList");
+  if (!summary || !list) return;
+  summary.textContent = "Checking backend readiness…";
+  list.innerHTML = "";
+  try {
+    const r = await api('/ops/readiness');
+    summary.textContent = r.ok
+      ? `Ready for production-critical checks (${r.summary.passing}/${r.summary.total} passing)`
+      : `Not production-ready yet (${r.summary.passing}/${r.summary.total} passing)`;
+    (r.checks || []).forEach((c) => {
+      const li = document.createElement('li');
+      li.className = `readiness-item ${c.ok ? 'ok' : 'warn'}`;
+      li.innerHTML = `<strong>${esc(c.key)}</strong>${esc(c.detail)}`;
+      list.appendChild(li);
+    });
+  } catch (e) {
+    summary.textContent = `Readiness check unavailable: ${e.message}`;
   }
 }
 
@@ -1561,7 +1620,7 @@ document.querySelectorAll(".tab").forEach((btn) =>
       return;
     }
     show(btn.dataset.view);
-    if (btn.dataset.view === "matches") { loadMatches(); loadSaved(); loadLikedYou(); loadViewedYou(); }
+    if (btn.dataset.view === "matches") { loadMatches(); loadSaved(); loadLikedYou(); loadViewedYou(); loadSwipeHistory(); }
   }),
 );
 
@@ -1588,6 +1647,7 @@ savedList.addEventListener("click", async (e) => {
 // ---------- settings, plan, push, install ----------
 qs("settingsBtn").addEventListener("click", () => show("settings"));
 qs("logoutBtn").addEventListener("click", logout);
+qs("refreshReadinessBtn")?.addEventListener("click", loadReadiness);
 qs("topbarLogoutBtn").addEventListener("click", () => {
   if (confirm("Log out?")) logout();
 });

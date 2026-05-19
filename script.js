@@ -1760,7 +1760,7 @@ async function openAdminModal() {
     // Top: seed-fakes tool.
     const seedRow = document.createElement("div");
     seedRow.className = "admin-row";
-    seedRow.innerHTML = `<div><strong>Seed test users</strong><div class="settings-sub">Creates up to 10 demo profiles for testing (idempotent).</div></div><button class="ghost" type="button" id="seedFakesBtn">Seed 10</button>`;
+    seedRow.innerHTML = `<div><strong>Seed test users</strong><div class="settings-sub">Creates up to 30 demo profiles for testing (idempotent).</div></div><button class="ghost" type="button" id="seedFakesBtn">Seed 30</button>`;
     body.appendChild(seedRow);
     qs("seedFakesBtn").addEventListener("click", async () => {
       const btn = qs("seedFakesBtn");
@@ -1774,7 +1774,7 @@ async function openAdminModal() {
         showToast(`${r.created} test users added`);
         if (r.created > 0) loadDiscover();
       } catch (e) { alert(e.message); }
-      finally { btn.disabled = false; btn.textContent = "Seed 10"; }
+      finally { btn.disabled = false; btn.textContent = "Seed 30"; }
     });
 
     const usersTitle = document.createElement("h3");

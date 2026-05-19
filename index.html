@@ -343,6 +343,7 @@
             <button class="tab-btn" data-pane="liked">Liked you <span id="likedYouCount"></span></button>
             <button class="tab-btn" data-pane="views">Viewed you <span id="viewsCount"></span></button>
             <button class="tab-btn" data-pane="saved">Shortlist <span id="savedCount"></span></button>
+            <button class="tab-btn" data-pane="history">Swipe history <span id="historyCount"></span></button>
           </div>
           <div class="tab-pane active" data-pane="matches">
             <ul id="matchesList" class="list"></ul>
@@ -355,6 +356,9 @@
           </div>
           <div class="tab-pane" data-pane="saved">
             <ul id="savedList" class="list"></ul>
+          </div>
+          <div class="tab-pane" data-pane="history">
+            <ul id="historyList" class="list"></ul>
           </div>
         </section>
 
@@ -447,6 +451,15 @@
               <div class="settings-sub"><a id="publicProfileLink" href="#" target="_blank">—</a></div>
             </div>
           </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Environment readiness</div>
+              <div class="settings-sub" id="readinessSummary">Checking backend readiness…</div>
+            </div>
+            <button id="refreshReadinessBtn" class="ghost" type="button">Refresh</button>
+          </div>
+          <ul id="readinessList" class="readiness-list"></ul>
+
           <div class="settings-row">
             <div>
               <div class="settings-label">Account</div>

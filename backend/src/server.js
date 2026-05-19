@@ -343,6 +343,45 @@ app.get('/health', async (_req, res) => {
   });
 });
 
+
+app.get('/ops/readiness', async (_req, res) => {
+  let dbOk = !prisma;
+  if (prisma) {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      dbOk = true;
+    } catch {
+      dbOk = false;
+    }
+  }
+
+  const checks = [
+    { key: 'database', ok: dbOk, required: true, detail: prisma ? 'Postgres reachable' : 'Running in in-memory mode (dev only)' },
+    { key: 'jwtSecret', ok: JWT_SECRET !== 'dev-secret-change-me', required: true, detail: JWT_SECRET !== 'dev-secret-change-me' ? 'Custom JWT secret configured' : 'Using default dev JWT secret' },
+    { key: 'googleAuth', ok: !!googleClient, required: false, detail: !!googleClient ? 'Google Sign-In configured' : 'GOOGLE_CLIENT_ID missing' },
+    { key: 'emailDelivery', ok: !!HAS_EMAIL, required: false, detail: !!HAS_EMAIL ? 'Resend email delivery configured' : 'RESEND_API_KEY missing (dev console email mode)' },
+    { key: 'cloudUpload', ok: !!HAS_CLOUD_UPLOAD, required: false, detail: !!HAS_CLOUD_UPLOAD ? 'Cloudinary upload configured' : 'CLOUDINARY_URL missing (base64 fallback mode)' },
+    { key: 'pushNotifications', ok: !!webpush, required: false, detail: !!webpush ? 'Web push configured' : 'VAPID/web-push missing' },
+  ];
+
+  const criticalChecks = checks.filter((c) => c.required);
+  const criticalOk = criticalChecks.every((c) => c.ok);
+  const optionalOk = checks.filter((c) => !c.required).every((c) => c.ok);
+
+  res.json({
+    ok: criticalOk,
+    mode: prisma ? 'postgres' : 'memory',
+    timestamp: new Date().toISOString(),
+    summary: {
+      criticalOk,
+      optionalOk,
+      total: checks.length,
+      passing: checks.filter((c) => c.ok).length,
+    },
+    checks,
+  });
+});
+
 app.get('/auth/config', (_req, res) => {
   res.json({
     googleClientId: GOOGLE_CLIENT_ID || null,
@@ -1481,6 +1520,53 @@ app.get('/saved', auth, async (req, res) => {
       .map((p) => ({ ...p, user: { fullName: mem.users.find((u) => u.id === p.userId)?.fullName } }));
   }
   res.json(profiles.map((p) => ({ ...p, fullName: p.user?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || p.user?.avatarUrl })));
+});
+
+app.get('/swipes/history', auth, async (req, res) => {
+  const meId = req.user.userId;
+  let rows;
+  if (prisma) {
+    rows = await prisma.swipe.findMany({
+      where: { fromUserId: meId },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: {
+        toUser: { select: { fullName: true, avatarUrl: true } },
+      },
+    });
+    const ids = rows.map((r) => r.toUserId);
+    const profiles = await prisma.profile.findMany({ where: { userId: { in: ids } } });
+    const byId = new Map(profiles.map((p) => [p.userId, p]));
+    return res.json(rows.map((r) => {
+      const prof = byId.get(r.toUserId);
+      return {
+        toUserId: r.toUserId,
+        direction: r.direction,
+        createdAt: r.createdAt,
+        fullName: r.toUser?.fullName || 'Unknown',
+        headline: prof?.headline || '',
+        avatarUrl: prof?.photoUrl || prof?.avatarUrl || r.toUser?.avatarUrl || null,
+      };
+    }));
+  }
+
+  rows = mem.swipes
+    .filter((x) => x.fromUserId === meId)
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .slice(0, 100);
+
+  return res.json(rows.map((r) => {
+    const user = mem.users.find((u) => u.id === r.toUserId);
+    const prof = mem.profiles.find((p) => p.userId === r.toUserId);
+    return {
+      toUserId: r.toUserId,
+      direction: r.direction,
+      createdAt: r.createdAt || null,
+      fullName: user?.fullName || 'Unknown',
+      headline: prof?.headline || '',
+      avatarUrl: prof?.photoUrl || prof?.avatarUrl || user?.avatarUrl || null,
+    };
+  }));
 });
 
 app.post('/blocks', auth, async (req, res) => {

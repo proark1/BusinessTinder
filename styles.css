@@ -746,3 +746,16 @@ a { color: var(--brand-1); }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) a { color: #6043e0; }
 }
+
+
+.readiness-list { list-style: none; padding: 0; margin: 10px 0 14px; display: grid; gap: 6px; }
+.readiness-item { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 0.82rem; }
+.readiness-item.ok { border-color: rgba(65, 200, 140, 0.45); }
+.readiness-item.warn { border-color: rgba(255, 184, 108, 0.55); }
+.readiness-item strong { font-size: 0.78rem; letter-spacing: .02em; color: var(--muted); margin-right: 6px; }
+
+.history-pill { display:inline-block; padding:4px 8px; border-radius:999px; font-size:.72rem; font-weight:700; margin-right:8px; }
+.history-pill.RIGHT{ background: rgba(40,216,146,.2); color: var(--good); }
+.history-pill.LEFT{ background: rgba(255,101,121,.2); color: var(--bad); }
+.history-pill.SUPER_LIKE{ background: rgba(73,166,255,.2); color: var(--brand-1); }
+.match-side small{ color: var(--muted); display:block; margin-top:4px; }

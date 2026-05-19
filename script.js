@@ -271,7 +271,7 @@ function renderCard(p, index, total) {
   (p.industries || []).slice(0, 4).forEach((t) => { const li = document.createElement("li"); li.textContent = t; tags.appendChild(li); });
   (p.skills || []).slice(0, 3).forEach((t) => {
     const li = document.createElement("li"); li.textContent = t;
-    li.style.background = "rgba(124,92,255,0.18)"; li.style.borderColor = "rgba(124,92,255,0.4)";
+    li.style.background = "rgba(30,64,175,0.18)"; li.style.borderColor = "rgba(30,64,175,0.4)";
     tags.appendChild(li);
   });
   const lf = (p.lookingFor || []).map((x) => x.replace("_", " ")).join(", ");

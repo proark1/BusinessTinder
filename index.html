@@ -331,7 +331,7 @@
             <button class="action detail" id="detailBtn" aria-label="Show profile detail (D)" title="Detail (D)">ⓘ</button>
             <button class="action save" id="saveBtn" aria-label="Save to shortlist (S)" title="Save (S)">＋</button>
           </section>
-          <p id="statusText" class="status">Swipe to discover your next business match.</p>
+          <p id="statusText" class="status" aria-live="polite" aria-atomic="true">Swipe to discover your next business match.</p>
           <div id="matchToast" class="toast" aria-live="polite"></div>
         </section>
 
@@ -567,7 +567,7 @@
     <!-- Profile detail modal -->
     <div id="detailModal" class="modal detail-modal" hidden role="dialog" aria-modal="true">
       <div class="detail-card glass">
-        <button class="detail-close" id="detailCloseBtn" type="button">✕</button>
+        <button class="detail-close" id="detailCloseBtn" type="button" aria-label="Close profile details">✕</button>
         <div class="detail-gallery" id="detailGallery"></div>
         <div class="detail-body" id="detailBody"></div>
       </div>

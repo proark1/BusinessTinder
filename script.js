@@ -147,6 +147,18 @@ function describeUserType(t) {
 function describeStage(s) {
   return ({ idea: "Idea", mvp: "MVP", live: "Live", revenue: "Revenue", scaling: "Scaling" })[s] || s || "";
 }
+function describeCommitment(v) {
+  return ({ full_time: "Full-time", part_time: "Part-time", exploring: "Exploring" })[v] || "";
+}
+function founderIntentLine(p) {
+  const goals = (p?.lookingFor || []).slice(0, 2).map((x) => x.replace(/_/g, " "));
+  const goalLine = goals.length ? `Seeking ${goals.join(" + ")}` : "Open to opportunities";
+  const stage = describeStage(p?.stage);
+  const commitment = describeCommitment(p?.commitment);
+  const time = Number.isFinite(Number(p?.hoursPerWeek)) ? `${Number(p.hoursPerWeek)}h/wk` : "";
+  const parts = [goalLine, stage, commitment, time].filter(Boolean);
+  return parts.join(" · ");
+}
 function avatarFor(p) {
   return (p?.photos?.[0] || p?.photoUrl || p?.avatarUrl ||
     `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(p?.fullName || p?.headline || "BT")}`);
@@ -269,6 +281,10 @@ function renderCard(p, index, total) {
   const distBit = typeof p.distanceKm === "number" ? ` · ${p.distanceKm} km away` : "";
   node.querySelector(".meta").textContent = `${describeUserType(p.userType)} · ${describeStage(p.stage)} · ${p.location || ""}${p.remoteOk ? " · Remote" : ""}${distBit}`;
   node.querySelector(".bio").textContent = p.bio || "";
+  const intentLine = document.createElement("p");
+  intentLine.className = "intent-line";
+  intentLine.textContent = founderIntentLine(p);
+  node.querySelector(".card-content").insertBefore(intentLine, node.querySelector(".tags"));
   const tags = node.querySelector(".tags");
   (p.industries || []).slice(0, 4).forEach((t) => { const li = document.createElement("li"); li.textContent = t; tags.appendChild(li); });
   (p.skills || []).slice(0, 3).forEach((t) => {
@@ -409,6 +425,9 @@ function openDetail(p) {
   const mutualHtml = (p.mutualHighlights || []).length
     ? `<div class="mutual-row">${p.mutualHighlights.map((h) => `<span class="mutual-chip">${esc(h.label)}</span>`).join("")}</div>`
     : "";
+  const whyMatchHtml = (p.matchReasons || []).length
+    ? `<section class="why-match"><h3>Why this match</h3><ul>${p.matchReasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></section>`
+    : "";
   const lastTier = lastActiveTier(p.lastActiveAt);
   const lastHtml = lastTier ? `<span class="last-active ${lastTier.cls}">${esc(lastTier.label)}</span>` : "";
   qs("detailBody").innerHTML = `
@@ -416,8 +435,10 @@ function openDetail(p) {
     <p class="role">${esc(p.headline || "")}</p>
     <p class="meta">${esc(describeUserType(p.userType))} · ${esc(describeStage(p.stage))} · ${esc(p.location || "")}${p.remoteOk ? " · Remote OK" : ""} ${lastHtml}</p>
     ${mutualHtml}
+    <p class="intent-line">${esc(founderIntentLine(p))}</p>
     ${typeof p.matchScore === "number" ? `<p class="reasons-row">${p.matchScore}% match${p.matchReasons?.length ? " · " + esc(p.matchReasons.join(" · ")) : ""}</p>` : ""}
     <p>${esc(p.bio || "")}</p>
+    ${whyMatchHtml}
     ${promptHtml}
     ${p.lookingFor?.length ? `<div class="section"><h3>Looking for</h3><ul class="tags">${tagList(p.lookingFor)}</ul></div>` : ""}
     ${p.industries?.length ? `<div class="section"><h3>Industries</h3><ul class="tags">${tagList(p.industries)}</ul></div>` : ""}

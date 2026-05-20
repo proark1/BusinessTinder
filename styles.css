@@ -152,6 +152,7 @@ body {
   min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  line-height: 1.45;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 
@@ -166,6 +167,10 @@ input, textarea, select { font-family: inherit; font-size: 1rem; }
   grid-template-rows: auto 1fr auto;
   gap: 12px;
   min-height: 100dvh;
+}
+
+main {
+  width: 100%;
 }
 
 .glass {
@@ -234,6 +239,30 @@ input:focus, textarea:focus, select:focus {
 }
 .ghost:hover { background: var(--bg-ghost-hover); }
 
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--brand-2);
+  outline-offset: 2px;
+}
+
+p, li {
+  line-height: 1.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ---------- Auth ---------- */
 .auth-screen { padding: 22px 20px 24px; }
 .auth-hero { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
@@ -300,6 +329,26 @@ input:focus, textarea:focus, select:focus {
 }
 .value-bullets li { display: flex; gap: 10px; align-items: flex-start; font-size: 0.86rem; color: var(--text-2); }
 .value-bullets .pro-check { color: var(--good); font-weight: 800; flex-shrink: 0; }
+.intent-line {
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-row);
+  color: var(--text-2);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.why-match {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-row);
+}
+.why-match h3 { margin: 0 0 6px; font-size: 0.88rem; }
+.why-match ul { margin: 0; padding-left: 18px; color: var(--text-2); font-size: 0.84rem; }
+.why-match li { margin: 2px 0; }
 
 /* ---------- Wizard ---------- */
 .wizard-progress { display: flex; gap: 6px; margin-bottom: 14px; }
@@ -377,12 +426,12 @@ input:focus, textarea:focus, select:focus {
 .card-content .bio {
   color: var(--text-2); font-size: 0.92rem; line-height: 1.4;
   margin: 0;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
   overflow: hidden;
 }
 .tags { display: flex; gap: 6px; list-style: none; padding: 0; flex-wrap: wrap; margin: 6px 0; }
 .tags li { font-size: 0.74rem; padding: 4px 10px; border-radius: 99px; background: var(--bg-chip); border: 1px solid var(--border-strong); color: var(--text); }
-.card-content .goal { margin-top: auto; color: var(--text); font-weight: 600; font-size: 0.86rem; }
+.card-content .goal { margin-top: auto; color: var(--text-2); font-weight: 600; font-size: 0.82rem; }
 .card-content .reasons { color: var(--good); font-size: 0.78rem; margin-top: 4px; }
 
 .actions { display: flex; justify-content: center; gap: 12px; margin: 14px 0 6px; }

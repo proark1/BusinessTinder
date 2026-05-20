@@ -119,3 +119,35 @@ These are expected in local/dev test mode but should be treated as deployment re
 - **Any bugs?** No failing automated tests found, but there are **readiness and product-depth gaps** that would impact real-world quality at scale.
 - **Are new features needed?** Yes—mainly in **trust/safety depth, explainability, growth instrumentation, and post-match workflow tooling**.
 
+---
+
+## UI/UX perfection pass (applied in this change)
+
+1. Added a polite live region for dynamic discovery status updates so screen-reader users get context changes without losing focus.
+2. Improved baseline readability with stronger global line-height for body copy and lists.
+3. Added consistent keyboard-visible focus rings across buttons, form controls, and links.
+4. Added `prefers-reduced-motion` safeguards to reduce motion for users with vestibular sensitivity.
+
+## What should change next to make this “best in class”
+
+### Product/UX (highest impact)
+1. Replace generic feed language with explicit founder-intent framing on every card (e.g., “seeking technical cofounder in fintech, part-time 10h/wk”).
+2. Add a persistent “Why this match” drawer with transparent scoring factors and confidence.
+3. Add guided post-match playbooks (pitch ask, intro request, hiring ask, investor update) with one-tap templates.
+4. Add outcome tracking: “met”, “follow-up sent”, “not a fit”, with reminders and CRM-lite timeline.
+
+### Trust & professionalism
+1. Add stronger identity and credibility signals (LinkedIn/company-domain verification, soft proof badges).
+2. Add layered moderation and anti-spam risk scoring (message velocity + complaint weighting + duplicate-template detection).
+3. Add profile integrity checks (empty buzzword bios, missing objective, contradictory goals) before publish.
+
+### UI polish
+1. Increase information hierarchy on cards: role + intent first, long bio collapsed by default.
+2. Tighten animation system into a single motion scale with micro-interactions only where informative.
+3. Add empty/loading/error states with concrete recovery actions in every tab.
+4. Add visual density preferences (compact vs comfortable) for power users.
+
+### Performance and reliability
+1. Add image pipeline constraints (format normalization, responsive sizes, blur-up placeholders).
+2. Add frontend web-vitals tracking and dashboards (LCP, INP, CLS) by route/view.
+3. Add offline-first chat queue and retry semantics for flaky mobile networks.

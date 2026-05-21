@@ -1,52 +1,145 @@
-CREATE TABLE IF NOT EXISTS users (
-  id SERIAL PRIMARY KEY,
-  email TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+-- Postgres schema mirroring backend/prisma/schema.prisma.
+--
+-- IMPORTANT: schema.prisma is the source of truth. This file exists so that
+-- operators who don't run Prisma migrations can still spin up a compatible
+-- database, and so that schema reviews can happen in plain SQL.
+--
+-- When you change schema.prisma, update this file in the same commit. The
+-- test in test/schema-parity.test.js will fail if the two drift.
+
+CREATE TYPE "SwipeDirection" AS ENUM ('LEFT', 'RIGHT', 'SUPER_LIKE');
+CREATE TYPE "MessageStatus" AS ENUM ('SENT', 'DELIVERED', 'READ');
+
+CREATE TABLE IF NOT EXISTS "User" (
+  "id"                    TEXT PRIMARY KEY,
+  "email"                 TEXT UNIQUE NOT NULL,
+  "passwordHash"          TEXT NOT NULL,
+  "fullName"              TEXT NOT NULL,
+  "googleSub"             TEXT UNIQUE,
+  "avatarUrl"             TEXT,
+  "planTier"              TEXT NOT NULL DEFAULT 'FREE',
+  "planExpiresAt"         TIMESTAMPTZ,
+  "referralCode"          TEXT UNIQUE,
+  "referredBy"            TEXT,
+  "lastSwipeDay"          TEXT,
+  "swipesToday"           INTEGER NOT NULL DEFAULT 0,
+  "notifPushOptIn"        BOOLEAN NOT NULL DEFAULT FALSE,
+  "emailVerified"         BOOLEAN NOT NULL DEFAULT FALSE,
+  "verificationToken"     TEXT UNIQUE,
+  "resetToken"            TEXT UNIQUE,
+  "resetTokenExpiresAt"   TIMESTAMPTZ,
+  "verified"              BOOLEAN NOT NULL DEFAULT FALSE,
+  "lastLikeRevealDay"     TEXT,
+  "likeRevealsToday"      INTEGER NOT NULL DEFAULT 0,
+  "revealedLikerIds"      TEXT[] NOT NULL DEFAULT '{}',
+  "boostUntil"            TIMESTAMPTZ,
+  "lastBoostDay"          TEXT,
+  "createdAt"             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "updatedAt"             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS profiles (
-  id SERIAL PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  payload JSONB NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS "Profile" (
+  "id"             TEXT PRIMARY KEY,
+  "userId"         TEXT UNIQUE NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+  "slug"           TEXT UNIQUE NOT NULL,
+  "headline"       TEXT NOT NULL,
+  "userType"       TEXT NOT NULL,
+  "lookingFor"     TEXT[] NOT NULL DEFAULT '{}',
+  "bio"            TEXT NOT NULL,
+  "stage"          TEXT NOT NULL,
+  "industries"     TEXT[] NOT NULL DEFAULT '{}',
+  "skills"         TEXT[] NOT NULL DEFAULT '{}',
+  "location"       TEXT NOT NULL,
+  "latitude"       DOUBLE PRECISION,
+  "longitude"      DOUBLE PRECISION,
+  "remoteOk"       BOOLEAN NOT NULL DEFAULT FALSE,
+  "commitment"     TEXT,
+  "linkedinUrl"    TEXT,
+  "avatarUrl"      TEXT,
+  "photoUrl"       TEXT,
+  "photos"         TEXT[] NOT NULL DEFAULT '{}',
+  "pastCompanies"  TEXT[] NOT NULL DEFAULT '{}',
+  "hoursPerWeek"   INTEGER,
+  "calLink"        TEXT,
+  "pitchDeckUrl"   TEXT,
+  "promptIds"      TEXT[] NOT NULL DEFAULT '{}',
+  "promptAnswers"  TEXT[] NOT NULL DEFAULT '{}',
+  "lastActiveAt"   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "createdAt"      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "updatedAt"      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS swipes (
-  id SERIAL PRIMARY KEY,
-  from_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  to_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  direction TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS "ProfileView" (
+  "id"        TEXT PRIMARY KEY,
+  "viewerId"  TEXT NOT NULL,
+  "viewedId"  TEXT NOT NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS "ProfileView_viewedId_createdAt_idx" ON "ProfileView" ("viewedId", "createdAt");
+CREATE INDEX IF NOT EXISTS "ProfileView_viewerId_viewedId_idx" ON "ProfileView" ("viewerId", "viewedId");
+
+CREATE TABLE IF NOT EXISTS "Swipe" (
+  "id"         TEXT PRIMARY KEY,
+  "fromUserId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+  "toUserId"   TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+  "direction"  "SwipeDirection" NOT NULL,
+  "createdAt"  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE ("fromUserId", "toUserId")
 );
 
-CREATE TABLE IF NOT EXISTS matches (
-  id SERIAL PRIMARY KEY,
-  user_a INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  user_b INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE (user_a, user_b)
+CREATE TABLE IF NOT EXISTS "Match" (
+  "id"        TEXT PRIMARY KEY,
+  "userAId"   TEXT NOT NULL,
+  "userBId"   TEXT NOT NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE ("userAId", "userBId")
 );
 
-CREATE TABLE IF NOT EXISTS messages (
-  id SERIAL PRIMARY KEY,
-  match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
-  from_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  text TEXT NOT NULL,
-  ts BIGINT NOT NULL
+CREATE TABLE IF NOT EXISTS "Conversation" (
+  "id"        TEXT PRIMARY KEY,
+  "matchId"   TEXT UNIQUE NOT NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS reports (
-  id SERIAL PRIMARY KEY,
-  from_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  target_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  reason TEXT,
-  ts BIGINT NOT NULL
+CREATE TABLE IF NOT EXISTS "Message" (
+  "id"             TEXT PRIMARY KEY,
+  "conversationId" TEXT NOT NULL REFERENCES "Conversation"("id") ON DELETE CASCADE,
+  "senderId"       TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+  "body"           TEXT NOT NULL,
+  "status"         "MessageStatus" NOT NULL DEFAULT 'SENT',
+  "kind"           TEXT NOT NULL DEFAULT 'text',
+  "createdAt"      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS blocks (
-  id SERIAL PRIMARY KEY,
-  from_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  target_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  ts BIGINT NOT NULL
+CREATE TABLE IF NOT EXISTS "SavedProfile" (
+  "id"            TEXT PRIMARY KEY,
+  "userId"        TEXT NOT NULL,
+  "profileUserId" TEXT NOT NULL,
+  "createdAt"     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE ("userId", "profileUserId")
+);
+
+CREATE TABLE IF NOT EXISTS "Report" (
+  "id"         TEXT PRIMARY KEY,
+  "reporterId" TEXT NOT NULL,
+  "targetId"   TEXT NOT NULL,
+  "reason"     TEXT,
+  "createdAt"  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS "Block" (
+  "id"        TEXT PRIMARY KEY,
+  "blockerId" TEXT NOT NULL,
+  "targetId"  TEXT NOT NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE ("blockerId", "targetId")
+);
+
+CREATE TABLE IF NOT EXISTS "PushSubscription" (
+  "id"        TEXT PRIMARY KEY,
+  "userId"    TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+  "endpoint"  TEXT UNIQUE NOT NULL,
+  "p256dh"    TEXT NOT NULL,
+  "auth"      TEXT NOT NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

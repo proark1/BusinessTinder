@@ -18,6 +18,7 @@ import { geocode, distanceKm, normalizeLocation } from './geocode.js';
 import { uploadDataUrl, HAS_CLOUD_UPLOAD } from './upload.js';
 import { isDisposableEmail } from './disposable.js';
 import { FAKE_USERS, FAKE_PASSWORD } from './fakes.js';
+import { isPhotoDataUrlSafe, todayKey, slugify, randomCode, effectivePlanTier } from './helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -191,15 +192,6 @@ function sendToUser(userId, payload) {
   return true;
 }
 
-function effectivePlanTier(user) {
-  if (!user) return 'FREE';
-  if (user.planTier === 'PRO') {
-    if (!user.planExpiresAt) return 'PRO';
-    if (new Date(user.planExpiresAt).getTime() > Date.now()) return 'PRO';
-    return 'FREE';
-  }
-  return user.planTier || 'FREE';
-}
 function publicUser(user) {
   if (!user) return null;
   return {
@@ -216,12 +208,6 @@ function publicUser(user) {
   };
 }
 
-function isPhotoDataUrlSafe(v) {
-  if (typeof v !== 'string') return false;
-  // Strict: only base64-encoded PNG/JPEG/WebP data URLs.
-  return /^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(v);
-}
-
 function sign(user, extra = {}) {
   return jwt.sign({ userId: user.id, email: user.email, ...extra }, JWT_SECRET, { expiresIn: '7d' });
 }
@@ -234,22 +220,6 @@ function auth(req, res, next) {
   } catch {
     res.status(401).json({ error: 'Unauthorized' });
   }
-}
-
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function slugify(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-}
-
-function randomCode(n = 8) {
-  return crypto.randomBytes(n).toString('base64url').slice(0, n);
 }
 
 async function findUserByEmail(email) {

@@ -1,6 +1,10 @@
 import crypto from 'node:crypto';
 
-const TOKEN_SECRET = process.env.BT_TOKEN_SECRET || 'dev-secret-change-me';
+const DEFAULT_DEV_TOKEN_SECRET = 'dev-secret-change-me';
+const TOKEN_SECRET = process.env.BT_TOKEN_SECRET || DEFAULT_DEV_TOKEN_SECRET;
+if (process.env.NODE_ENV === 'production' && TOKEN_SECRET === DEFAULT_DEV_TOKEN_SECRET) {
+  throw new Error('BT_TOKEN_SECRET must be set to a strong random value in production.');
+}
 
 export function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');

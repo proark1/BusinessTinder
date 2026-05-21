@@ -39,7 +39,9 @@ npm test
 For production, configure at minimum:
 
 - `DATABASE_URL`
-- `JWT_SECRET`
+- `JWT_SECRET` — the server refuses to start in production if this is unset or left at the dev default.
+- `BT_TOKEN_SECRET` — same enforcement for the lightweight HMAC tokens used by `backend/server.js`.
+- `ALLOWED_ORIGINS` — comma-separated list of origins allowed by CORS. In production an empty list locks the API down (no cross-origin requests accepted). Dev/test keeps the old open-CORS behavior when this is unset.
 
 Recommended for full functionality:
 
@@ -49,6 +51,10 @@ Recommended for full functionality:
 - `VAPID_PUBLIC_KEY`
 - `VAPID_PRIVATE_KEY`
 - `VAPID_SUBJECT`
+
+Opt-in only (avoid in production):
+
+- `ALLOW_DEV_PLAN_UPGRADE=true` — re-enables `POST /plan/upgrade` for staging/QA. Without this flag, the endpoint returns 501 in production because real payment integration is not yet wired up. Even when enabled, the grant is finite (`planExpiresAt = +30 days`).
 
 You can also check runtime readiness via:
 

@@ -759,7 +759,9 @@ function showMatchModal(profile, res) {
       await loadMatches();
       const match = state.matches.find((m) => m.other?.id === profile.userId);
       if (match) {
-        openChat(match.id).then(() => { qs("chatInput").value = prompt; qs("chatInput").focus(); });
+        openChat(match.id)
+          .then(() => { qs("chatInput").value = prompt; qs("chatInput").focus(); })
+          .catch(() => {});
       }
     });
     list.appendChild(li);
@@ -1356,7 +1358,9 @@ function connectWebSocket() {
         if (msg.type === "message") {
           if (state.activeMatch?.conversation?.id === msg.message.conversationId) {
             appendMessage(msg.message);
-            api(`/conversations/${msg.message.conversationId}/read`, { method: "POST" }).then(loadMatches);
+            api(`/conversations/${msg.message.conversationId}/read`, { method: "POST" })
+              .then(loadMatches)
+              .catch(() => {});
           } else {
             loadMatches();
           }
@@ -1460,7 +1464,9 @@ async function openChat(matchId) {
       box2.hidden = true;
     }
   } catch {}
-  api(`/conversations/${match.conversation.id}/read`, { method: "POST" }).then(loadMatches);
+  api(`/conversations/${match.conversation.id}/read`, { method: "POST" })
+    .then(loadMatches)
+    .catch(() => {});
   show("chat");
 }
 

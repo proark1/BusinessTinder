@@ -31,7 +31,27 @@ try {
 
 const app = express();
 app.set('trust proxy', 1); // honor X-Forwarded-For for rate limiting behind a proxy
-app.use(cors());
+
+// CORS: comma-separated allow-list via ALLOWED_ORIGINS. In production an empty
+// list locks the API down; in dev/test we keep the old wide-open behavior so
+// the static frontend + tests work without extra config.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+if (allowedOrigins.length > 0) {
+  app.use(cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // same-origin / curl / server-to-server
+      cb(null, allowedOrigins.includes(origin));
+    },
+    credentials: true,
+  }));
+} else if (process.env.NODE_ENV === 'production') {
+  console.error('[startup] ALLOWED_ORIGINS is empty in production — refusing all cross-origin requests.');
+  app.use(cors({ origin: false }));
+} else {
+  app.use(cors());
+}
+
 app.use(express.json({ limit: '4mb' })); // big enough for a small photo dataURL
 
 // Express 4 doesn't forward async-handler rejections to error middleware.
@@ -58,7 +78,11 @@ const limits = {
   general: rateLimit({ key: 'gen', limit: 240, windowMs: 60_000 }),
 };
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+const DEFAULT_DEV_JWT_SECRET = 'dev-secret-change-me';
+const JWT_SECRET = process.env.JWT_SECRET || DEFAULT_DEV_JWT_SECRET;
+if (process.env.NODE_ENV === 'production' && JWT_SECRET === DEFAULT_DEV_JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set to a strong random value in production.');
+}
 const DATABASE_URL = process.env.DATABASE_URL || process.env.RAILWAY_DATABASE_URL;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY || '';
@@ -1618,13 +1642,21 @@ app.post('/push/subscribe', auth, async (req, res) => {
 });
 
 app.post('/plan/upgrade', auth, async (req, res) => {
-  // Real Stripe wiring goes here. For now, flip the flag.
-  if (prisma) await prisma.user.update({ where: { id: req.user.userId }, data: { planTier: 'PRO' } });
+  // Real Stripe wiring goes here. Until that lands we refuse to flip the flag
+  // in production so a stray authenticated POST can't grant free Pro to anyone.
+  // Set ALLOW_DEV_PLAN_UPGRADE=true to opt back in (for staging/QA only).
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEV_PLAN_UPGRADE !== 'true') {
+    return res.status(501).json({ error: 'Plan upgrade is not yet available. Payment integration pending.' });
+  }
+  // Give the dev/staging grant a finite lifetime so it can't accidentally become
+  // a permanent free Pro for whoever triggers it.
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  if (prisma) await prisma.user.update({ where: { id: req.user.userId }, data: { planTier: 'PRO', planExpiresAt: expiresAt } });
   else {
     const u = mem.users.find((u) => u.id === req.user.userId);
-    if (u) u.planTier = 'PRO';
+    if (u) { u.planTier = 'PRO'; u.planExpiresAt = expiresAt.toISOString(); }
   }
-  res.json({ ok: true, planTier: 'PRO' });
+  res.json({ ok: true, planTier: 'PRO', planExpiresAt: expiresAt.toISOString() });
 });
 
 // Boost: Pro-only top-of-deck placement for 30 minutes. One per day.

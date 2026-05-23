@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS "Swipe" (
   "createdAt"  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE ("fromUserId", "toUserId")
 );
+CREATE INDEX IF NOT EXISTS "Swipe_toUserId_direction_idx" ON "Swipe" ("toUserId", "direction");
 
 CREATE TABLE IF NOT EXISTS "Match" (
   "id"        TEXT PRIMARY KEY,
@@ -94,6 +95,7 @@ CREATE TABLE IF NOT EXISTS "Match" (
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE ("userAId", "userBId")
 );
+CREATE INDEX IF NOT EXISTS "Match_userBId_idx" ON "Match" ("userBId");
 
 CREATE TABLE IF NOT EXISTS "Conversation" (
   "id"        TEXT PRIMARY KEY,
@@ -110,6 +112,7 @@ CREATE TABLE IF NOT EXISTS "Message" (
   "kind"           TEXT NOT NULL DEFAULT 'text',
   "createdAt"      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS "Message_conversationId_createdAt_idx" ON "Message" ("conversationId", "createdAt");
 
 CREATE TABLE IF NOT EXISTS "SavedProfile" (
   "id"            TEXT PRIMARY KEY,
@@ -134,6 +137,7 @@ CREATE TABLE IF NOT EXISTS "Block" (
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE ("blockerId", "targetId")
 );
+CREATE INDEX IF NOT EXISTS "Block_targetId_idx" ON "Block" ("targetId");
 
 CREATE TABLE IF NOT EXISTS "PushSubscription" (
   "id"        TEXT PRIMARY KEY,
@@ -143,3 +147,4 @@ CREATE TABLE IF NOT EXISTS "PushSubscription" (
   "auth"      TEXT NOT NULL,
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS "PushSubscription_userId_idx" ON "PushSubscription" ("userId");

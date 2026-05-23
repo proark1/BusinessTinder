@@ -2,15 +2,13 @@
 // console so dev environments still complete the flow (the existing dev-mode
 // `verifyUrl` / `resetUrl` in the API responses already cover the UX).
 
+import { escapeHtml as esc } from './helpers.js';
+
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const EMAIL_FROM = process.env.EMAIL_FROM || 'BusinessTinder <noreply@businesstinder.app>';
 const APP_URL = process.env.APP_URL || '';
 
 export const HAS_EMAIL = !!RESEND_API_KEY;
-
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
 
 export function appUrl(p) {
   if (!p) return APP_URL || '';

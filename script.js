@@ -523,6 +523,15 @@ async function loadMatches() {
   }
 }
 
+let _matchesRefetchTimer = null;
+// Coalesce rapid refetch triggers (incoming WS messages, read receipts) into a
+// single /matches call so a busy thread doesn't refetch the whole inbox on
+// every message.
+function scheduleLoadMatches() {
+  clearTimeout(_matchesRefetchTimer);
+  _matchesRefetchTimer = setTimeout(loadMatches, 150);
+}
+
 async function loadSaved() {
   try { state.saved = await api("/saved"); renderSaved(); } catch {}
 }
@@ -1023,7 +1032,7 @@ qs("onboardingForm").addEventListener("submit", async (e) => {
     state.isEditingProfile = false;
     updateChrome();
     show(wasEditing ? "settings" : "swipe");
-    if (wasEditing) showToast("Profile saved");
+    if (wasEditing) { loadSettingsData(); showToast("Profile saved"); }
     await Promise.all([loadDiscover(), loadMatches(), loadSaved(), loadLikedYou(), loadViewedYou(), loadSwipeHistory()]);
   } catch (err) {
     showAuthError("onboardingError", err.message);
@@ -1034,6 +1043,7 @@ qs("editCancelBtn").addEventListener("click", () => {
   state.isEditingProfile = false;
   fillOnboardingForm(state.profile);
   show(state.profile ? "settings" : "auth");
+  if (state.profile) loadSettingsData();
 });
 
 // ---------- auth ----------
@@ -1228,9 +1238,10 @@ function updateChrome() {
   }
   // Admin entry
   qs("adminRow").hidden = !state.user?.isAdmin;
-  // Boost row state (Pro only, ticking countdown when active)
-  refreshBoostStatus();
-  loadReadiness();
+  // Boost status + backend readiness are settings-only widgets — fetched by
+  // loadSettingsData() when the settings view opens, not on every chrome
+  // refresh (each was an extra API/DB round-trip per login, save, upgrade…).
+  if (qs("view-settings")?.classList.contains("active")) loadSettingsData();
   // Auto-detect ?verified=1 redirect from email link
   if (new URLSearchParams(location.search).get("verified") === "1") {
     showToast("Email verified ✓");
@@ -1359,10 +1370,10 @@ function connectWebSocket() {
           if (state.activeMatch?.conversation?.id === msg.message.conversationId) {
             appendMessage(msg.message);
             api(`/conversations/${msg.message.conversationId}/read`, { method: "POST" })
-              .then(loadMatches)
+              .then(scheduleLoadMatches)
               .catch(() => {});
           } else {
-            loadMatches();
+            scheduleLoadMatches();
           }
         }
         if (msg.type === "typing" && state.activeMatch?.conversation?.id === msg.conversationId) {
@@ -1465,7 +1476,7 @@ async function openChat(matchId) {
     }
   } catch {}
   api(`/conversations/${match.conversation.id}/read`, { method: "POST" })
-    .then(loadMatches)
+    .then(scheduleLoadMatches)
     .catch(() => {});
   show("chat");
 }
@@ -1648,6 +1659,7 @@ document.querySelectorAll(".tab").forEach((btn) =>
     }
     show(btn.dataset.view);
     if (btn.dataset.view === "matches") { loadMatches(); loadSaved(); loadLikedYou(); loadViewedYou(); loadSwipeHistory(); }
+    if (btn.dataset.view === "settings") loadSettingsData();
   }),
 );
 
@@ -1672,7 +1684,13 @@ savedList.addEventListener("click", async (e) => {
 });
 
 // ---------- settings, plan, push, install ----------
-qs("settingsBtn").addEventListener("click", () => show("settings"));
+// Fetch the settings-only widgets (boost status, backend readiness) only when
+// the settings view is actually opened.
+function loadSettingsData() {
+  refreshBoostStatus();
+  loadReadiness();
+}
+qs("settingsBtn").addEventListener("click", () => { show("settings"); loadSettingsData(); });
 qs("logoutBtn").addEventListener("click", logout);
 qs("refreshReadinessBtn")?.addEventListener("click", loadReadiness);
 qs("topbarLogoutBtn").addEventListener("click", () => {

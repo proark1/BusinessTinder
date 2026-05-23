@@ -98,14 +98,7 @@ export function rankProfiles(me, profiles) {
 
 export function diversify(ranked, key = (p) => p.profile.userType) {
   // Avoid 3+ of the same userType in a row.
-  const out = [];
-  const buckets = new Map();
-  for (const item of ranked) {
-    const k = key(item) || 'other';
-    const count = buckets.get(k) || 0;
-    buckets.set(k, count + 1);
-    out.push(item);
-  }
+  const out = [...ranked];
   // Light shuffle: if the same type appears 3+ times consecutively, move next different forward.
   for (let i = 2; i < out.length; i += 1) {
     if (key(out[i]) === key(out[i - 1]) && key(out[i - 1]) === key(out[i - 2])) {

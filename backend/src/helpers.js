@@ -5,6 +5,14 @@
 
 import crypto from 'node:crypto';
 
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+// Escape a string for safe interpolation into HTML (server-rendered profile
+// pages, transactional emails). Mirrors the frontend `esc()` in script.js.
+export function escapeHtml(v) {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+}
+
 // Strict allow-list: only base64-encoded PNG/JPEG/WebP data URLs. Used at every
 // boundary that accepts a photo (profile photos, chat image messages, upload
 // route). Anything else — including SVG, GIF, plain URLs — must go through the

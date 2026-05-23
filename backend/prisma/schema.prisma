@@ -92,6 +92,7 @@ model Swipe {
   toUser     User           @relation("recv", fields: [toUserId], references: [id], onDelete: Cascade)
 
   @@unique([fromUserId, toUserId])
+  @@index([toUserId, direction])
 }
 
 model Match {
@@ -101,6 +102,7 @@ model Match {
   createdAt DateTime @default(now())
 
   @@unique([userAId, userBId])
+  @@index([userBId])
 }
 
 model Conversation {
@@ -120,6 +122,8 @@ model Message {
   createdAt      DateTime      @default(now())
   conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
 }
 
 model SavedProfile {
@@ -146,6 +150,7 @@ model Block {
   createdAt DateTime @default(now())
 
   @@unique([blockerId, targetId])
+  @@index([targetId])
 }
 
 model PushSubscription {
@@ -156,6 +161,8 @@ model PushSubscription {
   auth      String
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 enum SwipeDirection {

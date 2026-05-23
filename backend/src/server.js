@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { WebSocketServer } from 'ws';
@@ -18,7 +19,7 @@ import { geocode, distanceKm, normalizeLocation } from './geocode.js';
 import { uploadDataUrl, HAS_CLOUD_UPLOAD } from './upload.js';
 import { isDisposableEmail } from './disposable.js';
 import { FAKE_USERS, FAKE_PASSWORD } from './fakes.js';
-import { isPhotoDataUrlSafe, todayKey, slugify, randomCode, effectivePlanTier } from './helpers.js';
+import { isPhotoDataUrlSafe, todayKey, slugify, randomCode, effectivePlanTier, escapeHtml } from './helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -32,6 +33,10 @@ try {
 
 const app = express();
 app.set('trust proxy', 1); // honor X-Forwarded-For for rate limiting behind a proxy
+
+// gzip JSON responses + static assets. The big wins are /discover and /search
+// payloads and the unminified script.js / styles.css.
+app.use(compression());
 
 // CORS: comma-separated allow-list via ALLOWED_ORIGINS. In production an empty
 // list locks the API down; in dev/test we keep the old wide-open behavior so
@@ -91,6 +96,11 @@ const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:noreply@businesstinder.app';
 const FREE_DAILY_SWIPES = Number(process.env.FREE_DAILY_SWIPES || 30);
 const FREE_DAILY_LIKE_REVEALS = Number(process.env.FREE_DAILY_LIKE_REVEALS || 1);
+// Cap the discover pool so we never fetch/score/serialize the entire profile
+// table in one request. Most-recently-active candidates win the slots.
+const DISCOVER_LIMIT = Number(process.env.DISCOVER_LIMIT || 200);
+// Cap search results returned to the client.
+const SEARCH_LIMIT = Number(process.env.SEARCH_LIMIT || 50);
 const ADMIN_EMAILS = new Set(
   (process.env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 );
@@ -748,12 +758,17 @@ app.get('/discover', auth, async (req, res) => {
     industry: req.query.industry && req.query.industry !== 'all' ? req.query.industry : null,
   };
 
+  // Boost slot 1: anyone who SUPER_LIKEd the current user jumps to the top.
   let filtered;
+  let superLikers;
   if (prisma) {
-    const swiped = await prisma.swipe.findMany({ where: { fromUserId: mine }, select: { toUserId: true } });
-    const blocks = await prisma.block.findMany({
-      where: { OR: [{ blockerId: mine }, { targetId: mine }] },
-    });
+    // These three only depend on `mine`, so fetch them in one round-trip.
+    const [swiped, blocks, superLikedMe] = await Promise.all([
+      prisma.swipe.findMany({ where: { fromUserId: mine }, select: { toUserId: true } }),
+      prisma.block.findMany({ where: { OR: [{ blockerId: mine }, { targetId: mine }] } }),
+      prisma.swipe.findMany({ where: { toUserId: mine, direction: 'SUPER_LIKE' }, select: { fromUserId: true } }),
+    ]);
+    superLikers = superLikedMe;
     const excludeIds = [mine, ...swiped.map((s) => s.toUserId), ...blocks.map((b) => (b.blockerId === mine ? b.targetId : b.blockerId))];
     filtered = await prisma.profile.findMany({
       where: {
@@ -764,8 +779,11 @@ app.get('/discover', auth, async (req, res) => {
         location: filters.location ? { contains: filters.location, mode: 'insensitive' } : undefined,
       },
       include: { user: { select: { fullName: true, avatarUrl: true } } },
+      orderBy: { lastActiveAt: 'desc' },
+      take: DISCOVER_LIMIT,
     });
   } else {
+    const usersById = new Map(mem.users.map((u) => [u.id, u]));
     const swiped = new Set(mem.swipes.filter((s) => s.fromUserId === mine).map((s) => s.toUserId));
     const blocked = new Set();
     for (const b of mem.blocks) {
@@ -775,22 +793,13 @@ app.get('/discover', auth, async (req, res) => {
     filtered = mem.profiles
       .filter((p) => p.userId !== mine && !swiped.has(p.userId) && !blocked.has(p.userId))
       .map((p) => {
-        const u = mem.users.find((u) => u.id === p.userId);
+        const u = usersById.get(p.userId);
         return { ...p, user: { fullName: u?.fullName, avatarUrl: u?.avatarUrl } };
       });
     if (filters.stage) filtered = filtered.filter((p) => p.stage === filters.stage);
     if (filters.lookingFor) filtered = filtered.filter((p) => (p.lookingFor || []).includes(filters.lookingFor));
     if (filters.industry) filtered = filtered.filter((p) => (p.industries || []).includes(filters.industry));
     if (filters.location) filtered = filtered.filter((p) => (p.location || '').toLowerCase().includes(filters.location));
-  }
-
-  // Boost slot 1: anyone who SUPER_LIKEd the current user jumps to the top.
-  let superLikers;
-  if (prisma) {
-    superLikers = await prisma.swipe.findMany({
-      where: { toUserId: mine, direction: 'SUPER_LIKE' }, select: { fromUserId: true },
-    });
-  } else {
     superLikers = mem.swipes.filter((s) => s.toUserId === mine && s.direction === 'SUPER_LIKE');
   }
   const superLikerSet = new Set(superLikers.map((s) => s.fromUserId));
@@ -922,9 +931,11 @@ app.get('/profile-views/incoming', auth, async (req, res) => {
       include: { user: { select: { fullName: true, avatarUrl: true } } },
     });
   } else {
+    const viewerIdSet = new Set(viewerIds);
+    const usersById = new Map(mem.users.map((u) => [u.id, u]));
     profiles = mem.profiles
-      .filter((p) => viewerIds.includes(p.userId))
-      .map((p) => ({ ...p, user: { fullName: mem.users.find((u) => u.id === p.userId)?.fullName } }));
+      .filter((p) => viewerIdSet.has(p.userId))
+      .map((p) => ({ ...p, user: { fullName: usersById.get(p.userId)?.fullName } }));
   }
   // Preserve the recency order.
   const byId = new Map(profiles.map((p) => [p.userId, p]));
@@ -936,40 +947,54 @@ app.get('/profile-views/incoming', auth, async (req, res) => {
 });
 
 app.get('/search', auth, async (req, res) => {
+  const meId = req.user.userId;
   const q = String(req.query.q || '').trim().toLowerCase();
   if (!q) return res.json([]);
-  const matches = (arr) =>
-    arr.filter((p) => {
-      const hay = [
-        p.headline, p.bio, p.location, p.user?.fullName,
-        (p.industries || []).join(' '),
-        (p.skills || []).join(' '),
-        (p.pastCompanies || []).join(' '),
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return hay.includes(q);
-    });
 
-  let pool;
   if (prisma) {
-    pool = await prisma.profile.findMany({
-      where: { userId: { not: req.user.userId } },
-      include: { user: { select: { fullName: true, avatarUrl: true } } },
-    });
-  } else {
-    pool = mem.profiles
-      .filter((p) => p.userId !== req.user.userId)
-      .map((p) => ({ ...p, user: { fullName: mem.users.find((u) => u.id === p.userId)?.fullName } }));
-  }
-  res.json(
-    matches(pool).slice(0, 50).map((p) => ({
+    // Filter + cap in the DB so we never pull the whole profile table over the
+    // wire on every keystroke. ILIKE is case-insensitive; array_to_string folds
+    // the tag columns into the haystack so keyword searches ("AI", "fintech")
+    // still match. Escape LIKE metacharacters so a stray % or _ stays literal.
+    const pattern = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+    const rows = await prisma.$queryRaw`
+      SELECT p.*, u."fullName" AS "ownerName", u."avatarUrl" AS "ownerAvatar"
+      FROM "Profile" p
+      JOIN "User" u ON u."id" = p."userId"
+      WHERE p."userId" <> ${meId}
+        AND (
+          COALESCE(p."headline", '') || ' ' || COALESCE(p."bio", '') || ' ' ||
+          COALESCE(p."location", '') || ' ' || COALESCE(u."fullName", '') || ' ' ||
+          array_to_string(p."industries", ' ') || ' ' ||
+          array_to_string(p."skills", ' ') || ' ' ||
+          array_to_string(p."pastCompanies", ' ')
+        ) ILIKE ${pattern}
+      ORDER BY p."lastActiveAt" DESC
+      LIMIT ${SEARCH_LIMIT}
+    `;
+    return res.json(rows.map(({ ownerName, ownerAvatar, ...p }) => ({
       ...p,
-      fullName: p.user?.fullName,
-      avatarUrl: p.photoUrl || p.avatarUrl || p.user?.avatarUrl,
-    })),
-  );
+      fullName: ownerName,
+      avatarUrl: p.photoUrl || p.avatarUrl || ownerAvatar,
+    })));
+  }
+
+  const usersById = new Map(mem.users.map((u) => [u.id, u]));
+  const out = [];
+  for (const p of mem.profiles) {
+    if (p.userId === meId) continue;
+    const owner = usersById.get(p.userId);
+    const hay = [
+      p.headline, p.bio, p.location, owner?.fullName,
+      (p.industries || []).join(' '),
+      (p.skills || []).join(' '),
+      (p.pastCompanies || []).join(' '),
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (!hay.includes(q)) continue;
+    out.push({ ...p, fullName: owner?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || owner?.avatarUrl });
+    if (out.length >= SEARCH_LIMIT) break;
+  }
+  res.json(out);
 });
 
 app.post('/swipes', auth, limits.swipe, async (req, res) => {
@@ -1074,9 +1099,11 @@ app.get('/likes/incoming', auth, async (req, res) => {
         include: { user: { select: { fullName: true, avatarUrl: true } } },
       });
     }
+    const idSet = new Set(ids);
+    const usersById = new Map(mem.users.map((u) => [u.id, u]));
     return mem.profiles
-      .filter((p) => ids.includes(p.userId))
-      .map((p) => ({ ...p, user: { fullName: mem.users.find((u) => u.id === p.userId)?.fullName } }));
+      .filter((p) => idSet.has(p.userId))
+      .map((p) => ({ ...p, user: { fullName: usersById.get(p.userId)?.fullName } }));
   };
   const shape = (arr) => arr.map((p) => ({
     ...p, fullName: p.user?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || p.user?.avatarUrl,
@@ -1373,13 +1400,22 @@ app.get('/matches', auth, async (req, res) => {
   const matches = mem.matches
     .filter((m) => m.userAId === userId || m.userBId === userId)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const usersById = new Map(mem.users.map((u) => [u.id, u]));
+  const profilesByUserId = new Map(mem.profiles.map((p) => [p.userId, p]));
+  const convByMatchId = new Map(mem.conversations.map((c) => [c.matchId, c]));
+  const msgsByConv = new Map();
+  for (const x of mem.messages) {
+    const list = msgsByConv.get(x.conversationId);
+    if (list) list.push(x);
+    else msgsByConv.set(x.conversationId, [x]);
+  }
   res.json(
     matches.map((m) => {
       const otherId = m.userAId === userId ? m.userBId : m.userAId;
-      const user = mem.users.find((u) => u.id === otherId);
-      const profile = mem.profiles.find((p) => p.userId === otherId);
-      const conversation = mem.conversations.find((c) => c.matchId === m.id);
-      const msgs = conversation ? mem.messages.filter((x) => x.conversationId === conversation.id) : [];
+      const user = usersById.get(otherId);
+      const profile = profilesByUserId.get(otherId);
+      const conversation = convByMatchId.get(m.id);
+      const msgs = conversation ? (msgsByConv.get(conversation.id) || []) : [];
       const lastMessage = msgs.length ? msgs[msgs.length - 1] : null;
       const unreadCount = msgs.filter((x) => x.senderId !== userId && x.status !== 'READ').length;
       return {
@@ -1509,9 +1545,11 @@ app.get('/saved', auth, async (req, res) => {
       include: { user: { select: { fullName: true, avatarUrl: true } } },
     });
   } else {
+    const idSet = new Set(ids);
+    const usersById = new Map(mem.users.map((u) => [u.id, u]));
     profiles = mem.profiles
-      .filter((p) => ids.includes(p.userId))
-      .map((p) => ({ ...p, user: { fullName: mem.users.find((u) => u.id === p.userId)?.fullName } }));
+      .filter((p) => idSet.has(p.userId))
+      .map((p) => ({ ...p, user: { fullName: usersById.get(p.userId)?.fullName } }));
   }
   res.json(profiles.map((p) => ({ ...p, fullName: p.user?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || p.user?.avatarUrl })));
 });
@@ -1549,9 +1587,11 @@ app.get('/swipes/history', auth, async (req, res) => {
     .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
     .slice(0, 100);
 
+  const usersById = new Map(mem.users.map((u) => [u.id, u]));
+  const profilesByUserId = new Map(mem.profiles.map((p) => [p.userId, p]));
   return res.json(rows.map((r) => {
-    const user = mem.users.find((u) => u.id === r.toUserId);
-    const prof = mem.profiles.find((p) => p.userId === r.toUserId);
+    const user = usersById.get(r.toUserId);
+    const prof = profilesByUserId.get(r.toUserId);
     return {
       toUserId: r.toUserId,
       direction: r.direction,
@@ -1774,10 +1814,12 @@ app.get('/blocks', auth, async (req, res) => {
     );
   }
   blocks = mem.blocks.filter((b) => b.blockerId === me);
+  const usersById = new Map(mem.users.map((x) => [x.id, x]));
+  const profilesByUserId = new Map(mem.profiles.map((x) => [x.userId, x]));
   res.json(
     blocks.map((b) => {
-      const u = mem.users.find((x) => x.id === b.targetId);
-      const p = mem.profiles.find((x) => x.userId === b.targetId);
+      const u = usersById.get(b.targetId);
+      const p = profilesByUserId.get(b.targetId);
       return { id: b.id, targetId: b.targetId, createdAt: b.createdAt, fullName: u?.fullName || null, headline: p?.headline || null };
     }),
   );
@@ -1799,7 +1841,7 @@ app.get('/u/:slug', async (req, res) => {
   const p = await findProfileBySlug(req.params.slug);
   if (!p) return res.status(404).send('Not found');
   const user = await findUserById(p.userId);
-  const safe = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const safe = escapeHtml;
   const tags = (arr) => (arr || []).map((t) => `<li>${safe(t)}</li>`).join('');
   const jsonLd = {
     '@context': 'https://schema.org',
@@ -1852,6 +1894,14 @@ app.use(express.static(STATIC_ROOT, {
   setHeaders: (res, filePath) => {
     const ext = path.extname(filePath).toLowerCase();
     if (STATIC_MIME[ext]) res.setHeader('Content-Type', STATIC_MIME[ext]);
+    // The HTML shell and core JS/CSS change in place on deploy (no content
+    // hashing), so revalidate them every load via ETag (cheap 304s). Truly
+    // static media can be cached for a day.
+    if (['.html', '.js', '.css'].includes(ext)) {
+      res.setHeader('Cache-Control', 'public, no-cache');
+    } else if (['.svg', '.png', '.ico', '.webmanifest'].includes(ext)) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+    }
   },
 }));
 

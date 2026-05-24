@@ -21,6 +21,7 @@ model User {
   lastSwipeDay          String?
   swipesToday           Int       @default(0)
   notifPushOptIn        Boolean   @default(false)
+  notifEmailOptOut      Boolean   @default(false)
   emailVerified         Boolean   @default(false)
   verificationToken     String?   @unique
   resetToken            String?   @unique

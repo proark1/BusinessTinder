@@ -109,7 +109,7 @@
               <input name="referredBy" placeholder="Friend's code" />
             </label>
             <button class="primary big" type="submit">Create account</button>
-            <p class="hint center tiny">By creating an account you agree to be a normal human in chat.</p>
+            <p class="hint center tiny">By creating an account you agree to our <a href="/legal/terms" target="_blank" rel="noopener">Terms</a> and <a href="/legal/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
             <p class="auth-error" id="registerError" hidden></p>
           </form>
 
@@ -118,6 +118,10 @@
             <li><span class="pro-check">✓</span> Smart matching with explainable score</li>
             <li><span class="pro-check">✓</span> See who liked you · super-likes · Cal.com</li>
           </ul>
+          <p class="legal-links center muted">
+            <a href="/legal/terms" target="_blank" rel="noopener">Terms</a> ·
+            <a href="/legal/privacy" target="_blank" rel="noopener">Privacy</a>
+          </p>
         </section>
 
         <!-- ========== ONBOARDING WIZARD / PROFILE EDITOR ========== -->
@@ -438,6 +442,13 @@
             </div>
             <button id="enablePushBtn" class="ghost" type="button">Enable</button>
           </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Email notifications</div>
+              <div class="settings-sub">Match &amp; message emails when you're offline</div>
+            </div>
+            <button id="emailNotifBtn" class="ghost" type="button">On</button>
+          </div>
           <div class="settings-row" id="installRow" hidden>
             <div>
               <div class="settings-label">Install app</div>
@@ -491,6 +502,10 @@
             </div>
             <button id="deleteAccountBtn" class="ghost" type="button" style="color:#ff8c9b;border-color:rgba(255,101,121,.4);">Delete</button>
           </div>
+          <p class="legal-links center muted">
+            <a href="/legal/terms" target="_blank" rel="noopener">Terms</a> ·
+            <a href="/legal/privacy" target="_blank" rel="noopener">Privacy</a>
+          </p>
         </section>
       </main>
 

@@ -66,23 +66,37 @@ export async function sendResetEmail(to, name, resetUrl) {
   });
 }
 
-export async function sendMessageDigestEmail(to, name, fromName, preview) {
+// Footer with a one-click unsubscribe link, appended to activity emails
+// (match / message digest) only — never to verification or password reset.
+function unsubFooter(unsubscribeUrl) {
+  if (!unsubscribeUrl) return { text: '', html: '' };
+  const url = appUrl(unsubscribeUrl);
+  return {
+    text: `\n\n—\nDon't want these emails? Unsubscribe: ${url}`,
+    html: `<hr style="border:none;border-top:1px solid #eee;margin:18px 0;" />
+      <p style="color:#999;font-size:12px;">You're receiving this because you have a BusinessTinder account. <a href="${esc(url)}" style="color:#999;">Unsubscribe from activity emails</a>.</p>`,
+  };
+}
+
+export async function sendMessageDigestEmail(to, name, fromName, preview, unsubscribeUrl) {
+  const foot = unsubFooter(unsubscribeUrl);
   return sendEmail({
     to,
     subject: `${fromName} sent you a message on BusinessTinder`,
-    text: `Hi ${name || ''},\n\n${fromName}: ${preview}\n\nOpen the app to reply.\n\n— BusinessTinder`,
+    text: `Hi ${name || ''},\n\n${fromName}: ${preview}\n\nOpen the app to reply.\n\n— BusinessTinder${foot.text}`,
     html: `<p>Hi ${esc(name)},</p>
       <p><strong>${esc(fromName)}</strong> sent you a message:</p>
       <blockquote style="margin:0;padding:10px 14px;border-left:3px solid #1e40af;color:#444;">${esc(preview)}</blockquote>
-      <p>Open the app to reply.</p>`,
+      <p>Open the app to reply.</p>${foot.html}`,
   });
 }
 
-export async function sendMatchEmail(to, name, otherName) {
+export async function sendMatchEmail(to, name, otherName, unsubscribeUrl) {
+  const foot = unsubFooter(unsubscribeUrl);
   return sendEmail({
     to,
     subject: `You matched with ${otherName} on BusinessTinder`,
-    text: `Hi ${name || ''},\n\nYou matched with ${otherName} on BusinessTinder. Open the app to start the conversation.\n\n— BusinessTinder`,
-    html: `<p>Hi ${esc(name)},</p><p>✨ You matched with <strong>${esc(otherName)}</strong> on BusinessTinder.</p><p>Open the app to start the conversation.</p>`,
+    text: `Hi ${name || ''},\n\nYou matched with ${otherName} on BusinessTinder. Open the app to start the conversation.\n\n— BusinessTinder${foot.text}`,
+    html: `<p>Hi ${esc(name)},</p><p>✨ You matched with <strong>${esc(otherName)}</strong> on BusinessTinder.</p><p>Open the app to start the conversation.</p>${foot.html}`,
   });
 }

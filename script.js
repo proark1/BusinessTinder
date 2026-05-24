@@ -1214,6 +1214,7 @@ function updateChrome() {
       : "FREE";
   qs("settingsReferral").textContent = state.user?.referralCode || "—";
   qs("settingsEmail").textContent = state.user?.email || "—";
+  renderEmailNotifBtn();
   if (state.profile?.slug) {
     const link = `${API_BASE}/u/${state.profile.slug}`;
     qs("publicProfileLink").href = link;
@@ -2006,6 +2007,23 @@ qs("enablePushBtn").addEventListener("click", async () => {
   const json = sub.toJSON();
   await api("/push/subscribe", { method: "POST", body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }) });
   showToast("Push enabled");
+});
+
+function renderEmailNotifBtn() {
+  const btn = qs("emailNotifBtn");
+  if (!btn) return;
+  const optedOut = !!state.user?.emailOptOut;
+  btn.textContent = optedOut ? "Off" : "On";
+  btn.classList.toggle("active", !optedOut);
+}
+qs("emailNotifBtn")?.addEventListener("click", async () => {
+  const nextOptOut = !state.user?.emailOptOut;
+  try {
+    const r = await api("/me/notifications", { method: "POST", body: JSON.stringify({ emailOptOut: nextOptOut }) });
+    if (state.user) state.user.emailOptOut = r.emailOptOut;
+    renderEmailNotifBtn();
+    showToast(r.emailOptOut ? "Activity emails off" : "Activity emails on");
+  } catch (e) { showToast(e.message); }
 });
 window.addEventListener("beforeinstallprompt", (e) => {
   e.preventDefault();

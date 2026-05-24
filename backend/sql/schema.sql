@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS "User" (
   "lastSwipeDay"          TEXT,
   "swipesToday"           INTEGER NOT NULL DEFAULT 0,
   "notifPushOptIn"        BOOLEAN NOT NULL DEFAULT FALSE,
+  "notifEmailOptOut"      BOOLEAN NOT NULL DEFAULT FALSE,
   "emailVerified"         BOOLEAN NOT NULL DEFAULT FALSE,
   "verificationToken"     TEXT UNIQUE,
   "resetToken"            TEXT UNIQUE,

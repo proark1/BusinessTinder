@@ -791,6 +791,13 @@ p, li {
 
 /* ---------- Misc ---------- */
 .center { text-align: center; }
+.muted { color: var(--muted); }
+.legal-links { margin-top: 16px; font-size: 0.85rem; }
+.legal-links a { color: var(--text-2); text-decoration: none; }
+.legal-links a:hover { text-decoration: underline; }
+.legal-page { max-width: 680px; margin: 0 auto; line-height: 1.6; }
+.legal-page h1 { margin-top: 0; }
+.legal-page h3 { margin: 18px 0 4px; }
 code { font-family: ui-monospace, monospace; background: var(--bg-chip); padding: 2px 6px; border-radius: 6px; font-size: 0.86rem; color: var(--text); }
 a { color: var(--brand-1); }
 :root[data-theme="light"] a { color: #6043e0; }

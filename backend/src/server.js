@@ -222,12 +222,34 @@ function publicUser(user) {
     referralCode: user.referralCode || null,
     emailVerified: !!user.emailVerified,
     verified: !!user.verified,
+    emailOptOut: !!user.notifEmailOptOut,
     isAdmin: isAdminEmail(user.email),
   };
 }
 
 function sign(user, extra = {}) {
   return jwt.sign({ userId: user.id, email: user.email, ...extra }, JWT_SECRET, { expiresIn: '7d' });
+}
+
+// One-click email unsubscribe link token. A dedicated HMAC (not a JWT) so the
+// link can't be replayed as an auth token. Deterministic so we don't need to
+// persist it.
+function unsubToken(userId) {
+  return crypto.createHmac('sha256', JWT_SECRET).update(`unsub:${userId}`).digest('base64url');
+}
+function unsubscribePath(userId) {
+  return `/unsubscribe?u=${encodeURIComponent(userId)}&t=${unsubToken(userId)}`;
+}
+function verifyUnsubToken(userId, token) {
+  const expected = unsubToken(userId);
+  const a = Buffer.from(String(token || ''));
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+// Whether transactional "activity" emails (match / message digest) should go to
+// this recipient. Verification + password-reset emails always send regardless.
+function wantsActivityEmail(user) {
+  return !!user && !user.notifEmailOptOut;
 }
 
 function banMessage(user) {
@@ -1066,7 +1088,7 @@ app.post('/swipes', auth, limits.swipe, async (req, res) => {
       pushToUser(toUserId, { title: 'New match on BusinessTinder', body: `${user.fullName} matched with you.` });
       // Also email the other side — push is opt-in, email is the safer net.
       const otherUser = await findUserById(toUserId);
-      if (otherUser?.email) sendMatchEmail(otherUser.email, otherUser.fullName, user.fullName).catch(() => {});
+      if (otherUser?.email && wantsActivityEmail(otherUser)) sendMatchEmail(otherUser.email, otherUser.fullName, user.fullName, unsubscribePath(otherUser.id)).catch(() => {});
       return res.json({ matched: true, match, conversation, icebreakers: suggestIcebreakers(theirProfile), theirIcebreakers: suggestIcebreakers(myProfile) });
     }
     return res.json({ matched: false });
@@ -1750,6 +1772,36 @@ app.post('/push/subscribe', auth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Toggle activity (match / message digest) emails for the signed-in user.
+app.post('/me/notifications', auth, async (req, res) => {
+  const emailOptOut = !!req.body?.emailOptOut;
+  if (prisma) {
+    await prisma.user.update({ where: { id: req.user.userId }, data: { notifEmailOptOut: emailOptOut } });
+  } else {
+    const u = mem.users.find((x) => x.id === req.user.userId);
+    if (u) u.notifEmailOptOut = emailOptOut;
+  }
+  res.json({ ok: true, emailOptOut });
+});
+
+// One-click unsubscribe from a transactional email footer. No auth — the
+// signed token in the link authorizes it. Always opts the user OUT.
+app.get('/unsubscribe', async (req, res) => {
+  const userId = String(req.query.u || '');
+  const token = String(req.query.t || '');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  if (!userId || !verifyUnsubToken(userId, token)) {
+    return res.status(400).send(unsubscribePage('That unsubscribe link is invalid or expired.', false));
+  }
+  if (prisma) {
+    await prisma.user.update({ where: { id: userId }, data: { notifEmailOptOut: true } }).catch(() => {});
+  } else {
+    const u = mem.users.find((x) => x.id === userId);
+    if (u) u.notifEmailOptOut = true;
+  }
+  res.send(unsubscribePage("You're unsubscribed from BusinessTinder activity emails. You can re-enable them anytime in Settings.", true));
+});
+
 app.post('/plan/upgrade', auth, async (req, res) => {
   // Real Stripe wiring goes here. Until that lands we refuse to flip the flag
   // in production so a stray authenticated POST can't grant free Pro to anyone.
@@ -1935,6 +1987,75 @@ app.delete('/blocks/:targetId', auth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Minimal branded HTML shell for server-rendered standalone pages
+// (unsubscribe confirmation, legal docs). Body is trusted/static here.
+function staticPage(title, bodyHtml) {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escapeHtml(title)} · BusinessTinder</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg" />
+<link rel="stylesheet" href="/styles.css" />
+</head><body><div class="app-shell"><main class="glass pad legal-page">
+${bodyHtml}
+<p style="margin-top:24px;"><a class="primary" style="display:inline-block;padding:12px 20px;text-decoration:none;border-radius:12px;" href="/">← Back to BusinessTinder</a></p>
+</main></div></body></html>`;
+}
+
+function unsubscribePage(message, ok) {
+  return staticPage(ok ? 'Unsubscribed' : 'Unsubscribe', `<h1>${ok ? 'Unsubscribed' : 'Unsubscribe'}</h1><p>${escapeHtml(message)}</p>`);
+}
+
+const LEGAL_EFFECTIVE = '2026-05-24';
+const LEGAL = {
+  terms: { title: 'Terms of Service', html: `
+    <h1>Terms of Service</h1>
+    <p class="muted">Last updated ${LEGAL_EFFECTIVE}</p>
+    <p>Welcome to BusinessTinder, a professional networking and matching service. By creating an account or using the service you agree to these terms.</p>
+    <h3>1. Eligibility &amp; accounts</h3>
+    <p>You must be at least 18 and provide accurate profile information. You are responsible for activity under your account and for keeping your credentials secure.</p>
+    <h3>2. Acceptable use</h3>
+    <p>No harassment, spam, fraud, impersonation, or unlawful, sexual, or abusive content. We may moderate, suspend, or remove accounts that violate these rules.</p>
+    <h3>3. Content</h3>
+    <p>You retain ownership of what you post but grant us a licence to display it within the service. Don't upload content you don't have the rights to.</p>
+    <h3>4. Paid plans</h3>
+    <p>Optional PRO features may be offered. Pricing and billing terms are presented at the point of purchase.</p>
+    <h3>5. Disclaimers</h3>
+    <p>The service is provided "as is". We don't guarantee matches, outcomes, or uninterrupted availability.</p>
+    <h3>6. Termination</h3>
+    <p>You may delete your account at any time in Settings. We may suspend access for violations of these terms.</p>
+    <h3>7. Contact</h3>
+    <p>Questions: <a href="mailto:support@businesstinder.app">support@businesstinder.app</a>.</p>
+    <p class="muted">This is a general template and not legal advice; have counsel review before relying on it in production.</p>` },
+  privacy: { title: 'Privacy Policy', html: `
+    <h1>Privacy Policy</h1>
+    <p class="muted">Last updated ${LEGAL_EFFECTIVE}</p>
+    <p>This policy explains what BusinessTinder collects and how it's used.</p>
+    <h3>1. Data we collect</h3>
+    <p>Account details (name, email), profile content you provide (headline, bio, photos, links), and activity such as swipes, matches, and messages. We store approximate location only if you provide a location.</p>
+    <h3>2. How we use it</h3>
+    <p>To operate matching and chat, secure the service, prevent abuse, and send transactional emails (verification, password reset, and — unless you opt out — match/message notifications).</p>
+    <h3>3. Sharing</h3>
+    <p>Your profile is visible to other users as part of matching. We use processors for email delivery, image hosting, and (optionally) push notifications. We don't sell your personal data.</p>
+    <h3>4. Your choices</h3>
+    <p>You can edit your profile, opt out of activity emails (Settings or any email's unsubscribe link), and permanently delete your account and associated data from Settings.</p>
+    <h3>5. Retention &amp; security</h3>
+    <p>We keep data while your account is active and remove it on deletion. We apply reasonable safeguards but no system is perfectly secure.</p>
+    <h3>6. Contact</h3>
+    <p>Privacy questions: <a href="mailto:privacy@businesstinder.app">privacy@businesstinder.app</a>.</p>
+    <p class="muted">This is a general template and not legal advice; have counsel review before relying on it in production.</p>` },
+};
+function serveLegal(key) {
+  return (_req, res) => {
+    const doc = LEGAL[key];
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(staticPage(doc.title, doc.html));
+  };
+}
+app.get('/legal/terms', serveLegal('terms'));
+app.get('/legal/privacy', serveLegal('privacy'));
+
 // Public profile page (server-rendered, no auth)
 app.get('/u/:slug', async (req, res) => {
   const p = await findProfileBySlug(req.params.slug);
@@ -2119,8 +2240,8 @@ wss.on('connection', (ws, req) => {
           if (shouldEmailMessage(toUserId, conversationId)) {
             const recipient = await findUserById(toUserId);
             const sender = await findUserById(userId);
-            if (recipient?.email && sender) {
-              sendMessageDigestEmail(recipient.email, recipient.fullName, sender.fullName, preview).catch(() => {});
+            if (recipient?.email && sender && wantsActivityEmail(recipient)) {
+              sendMessageDigestEmail(recipient.email, recipient.fullName, sender.fullName, preview, unsubscribePath(recipient.id)).catch(() => {});
             }
           }
         }

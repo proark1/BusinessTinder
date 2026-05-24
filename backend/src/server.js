@@ -23,6 +23,7 @@ import { todayKey, slugify, randomCode, effectivePlanTier, escapeHtml, isBanned,
 import { loginLockState, recordLoginFailure, clearLoginFailures } from './loginGuard.js';
 import { requestId, requestLogger, reportError, HAS_ERROR_REPORTING } from './observability.js';
 import { generateSecret, verifyTotp, otpauthUrl, generateRecoveryCodes, hashRecoveryCode } from './totp.js';
+import { initCluster, clusterEnabled, publishDelivery, presenceAdd, presenceRemove, isOnlineAnywhere } from './cluster.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -202,13 +203,17 @@ function addWsClient(userId, ws) {
   if (!wsClients.has(userId)) wsClients.set(userId, new Set());
   wsClients.get(userId).add(ws);
 }
+// Returns true when that was the user's last local socket (so callers can
+// clear cross-instance presence).
 function removeWsClient(userId, ws) {
   const set = wsClients.get(userId);
-  if (!set) return;
+  if (!set) return false;
   set.delete(ws);
-  if (set.size === 0) wsClients.delete(userId);
+  if (set.size === 0) { wsClients.delete(userId); return true; }
+  return false;
 }
-function sendToUser(userId, payload) {
+// Deliver only to sockets connected to THIS instance.
+function localSendToUser(userId, payload) {
   const set = wsClients.get(userId);
   if (!set || set.size === 0) return false;
   const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
@@ -216,6 +221,19 @@ function sendToUser(userId, payload) {
     try { ws.send(json); } catch {}
   }
   return true;
+}
+// Deliver locally and, when clustered, fan out to the other instances. Returns
+// whether the message was delivered to a local socket.
+function sendToUser(userId, payload) {
+  const local = localSendToUser(userId, payload);
+  if (clusterEnabled()) publishDelivery(userId, payload);
+  return local;
+}
+// Is this user connected to any instance (local or, when clustered, remote)?
+async function isUserConnected(userId) {
+  if (wsClients.has(userId)) return true;
+  if (clusterEnabled()) return isOnlineAnywhere(userId);
+  return false;
 }
 
 function publicUser(user) {
@@ -414,6 +432,7 @@ app.get('/ops/readiness', async (_req, res) => {
     { key: 'cloudUpload', ok: !!HAS_CLOUD_UPLOAD, required: false, detail: !!HAS_CLOUD_UPLOAD ? 'Cloudinary upload configured' : 'CLOUDINARY_URL missing (base64 fallback mode)' },
     { key: 'pushNotifications', ok: !!webpush, required: false, detail: !!webpush ? 'Web push configured' : 'VAPID/web-push missing' },
     { key: 'errorReporting', ok: HAS_ERROR_REPORTING, required: false, detail: HAS_ERROR_REPORTING ? 'Error webhook configured' : 'ERROR_WEBHOOK_URL missing (errors logged only)' },
+    { key: 'multiNode', ok: clusterEnabled(), required: false, detail: clusterEnabled() ? 'Redis pub/sub active — WebSocket scales across instances' : 'Single-node WebSocket (set REDIS_URL to scale out)' },
   ];
 
   const criticalChecks = checks.filter((c) => c.required);
@@ -2371,7 +2390,7 @@ wss.on('connection', (ws, req) => {
   if (urlToken) {
     try { payload = jwt.verify(urlToken, JWT_SECRET); } catch { /* fall through to handshake */ }
   }
-  if (payload) addWsClient(payload.userId, ws);
+  if (payload) { addWsClient(payload.userId, ws); presenceAdd(payload.userId); }
 
   // If no URL token, give the client a brief window to send `{ type: 'auth', token }`.
   const handshakeTimer = setTimeout(() => {
@@ -2387,6 +2406,7 @@ wss.on('connection', (ws, req) => {
           payload = jwt.verify(data.token, JWT_SECRET);
           clearTimeout(handshakeTimer);
           addWsClient(payload.userId, ws);
+          presenceAdd(payload.userId);
           ws.send(JSON.stringify({ type: 'auth_ok' }));
         } catch {
           ws.close(1008, 'invalid-token');
@@ -2436,8 +2456,10 @@ wss.on('connection', (ws, req) => {
         }
         ws.send(JSON.stringify({ type: 'message_ack', messageId: saved.id, status: 'DELIVERED' }));
         const preview = safeKind === 'image' ? '📷 Photo' : String(body).slice(0, 80);
-        const delivered = sendToUser(toUserId, { type: 'message', message: saved });
-        if (!delivered) {
+        sendToUser(toUserId, { type: 'message', message: saved });
+        // Only fall back to push/email when the recipient isn't connected to
+        // any instance (sendToUser already fanned out to remote nodes).
+        if (!(await isUserConnected(toUserId))) {
           pushToUser(toUserId, { title: 'New message', body: preview });
           // Email digest fallback when recipient isn't online — throttled
           // per conversation so an active thread doesn't spam them.
@@ -2474,9 +2496,18 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     clearTimeout(handshakeTimer);
-    if (payload) removeWsClient(payload.userId, ws);
+    if (payload) {
+      const wasLast = removeWsClient(payload.userId, ws);
+      if (wasLast) presenceRemove(payload.userId);
+    }
   });
 });
+
+// Bring up cross-instance fan-out (no-op unless REDIS_URL is set). Remote
+// deliveries are handed to the local-only sender to avoid a publish loop.
+initCluster((userId, payload) => localSendToUser(userId, payload)).catch((e) =>
+  console.warn('[cluster] init error:', e?.message),
+);
 
 const PORT = process.env.PORT || 4000;
 const isMain = (() => {

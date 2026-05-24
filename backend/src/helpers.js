@@ -57,3 +57,12 @@ export function effectivePlanTier(user) {
   }
   return user.planTier || 'FREE';
 }
+
+// A user is banned when bannedAt is set and the ban hasn't expired. A null
+// bannedUntil is a permanent ban; a future bannedUntil is a timed suspension
+// that lapses on its own.
+export function isBanned(user) {
+  if (!user?.bannedAt) return false;
+  if (!user.bannedUntil) return true;
+  return new Date(user.bannedUntil).getTime() > Date.now();
+}

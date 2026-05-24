@@ -22,6 +22,7 @@ import { FAKE_USERS, FAKE_PASSWORD } from './fakes.js';
 import { todayKey, slugify, randomCode, effectivePlanTier, escapeHtml, isBanned, validatePassword, emailDomain, isFreeEmailDomain } from './helpers.js';
 import { loginLockState, recordLoginFailure, clearLoginFailures } from './loginGuard.js';
 import { requestId, requestLogger, reportError, HAS_ERROR_REPORTING } from './observability.js';
+import { generateSecret, verifyTotp, otpauthUrl, generateRecoveryCodes, hashRecoveryCode } from './totp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -232,6 +233,7 @@ function publicUser(user) {
     emailOptOut: !!user.notifEmailOptOut,
     companyVerified: !!user.companyVerifiedAt,
     companyDomain: user.companyDomain || null,
+    twoFactorEnabled: !!user.totpEnabled,
     isAdmin: isAdminEmail(user.email),
   };
 }
@@ -519,7 +521,44 @@ app.post('/auth/login', limits.authStrict, async (req, res) => {
   }
   if (isBanned(user)) return res.status(403).json({ error: banMessage(user) });
   clearLoginFailures(email);
+  // 2FA step-up: password was correct, but a second factor is required before
+  // we hand out a full session token.
+  if (user.totpEnabled) {
+    const mfaToken = jwt.sign({ userId: user.id, purpose: 'mfa' }, JWT_SECRET, { expiresIn: '5m' });
+    return res.json({ mfaRequired: true, mfaToken });
+  }
   res.json({ token: sign(user), user: publicUser(user) });
+});
+
+// Second step of a 2FA login: exchange the short-lived mfaToken + a TOTP code
+// (or a one-time recovery code) for a real session token.
+app.post('/auth/2fa', limits.authStrict, async (req, res) => {
+  const { mfaToken, code } = req.body || {};
+  let payload;
+  try {
+    payload = jwt.verify(String(mfaToken || ''), JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Your verification step expired — sign in again.' });
+  }
+  if (payload.purpose !== 'mfa') return res.status(401).json({ error: 'Invalid token' });
+  const user = await findUserById(payload.userId);
+  if (!user || !user.totpEnabled) return res.status(400).json({ error: '2FA is not enabled for this account.' });
+  if (isBanned(user)) return res.status(403).json({ error: banMessage(user) });
+
+  const entered = String(code || '').trim();
+  if (verifyTotp(user.totpSecret, entered)) {
+    return res.json({ token: sign(user), user: publicUser(user) });
+  }
+  // Fall back to a one-time recovery code.
+  const hash = hashRecoveryCode(entered);
+  const codes = user.recoveryCodes || [];
+  if (codes.includes(hash)) {
+    const remaining = codes.filter((c) => c !== hash);
+    if (prisma) await prisma.user.update({ where: { id: user.id }, data: { recoveryCodes: remaining } });
+    else user.recoveryCodes = remaining;
+    return res.json({ token: sign(user), user: publicUser(user), recoveryCodeUsed: true });
+  }
+  return res.status(401).json({ error: 'Invalid code.' });
 });
 
 app.post('/auth/google', limits.authStrict, async (req, res) => {
@@ -1900,6 +1939,49 @@ app.get('/company/verify', async (req, res) => {
     user.companyVerifiedAt = new Date().toISOString(); user.companyDomain = domain; user.companyVerifyToken = null;
   }
   res.redirect('/?companyVerified=1');
+});
+
+// ---------- two-factor auth (TOTP) ----------
+// Begin enrollment: mint a secret (not yet active) and return the otpauth URI
+// for the user's authenticator app. Activation happens in /me/2fa/enable.
+app.post('/me/2fa/setup', auth, async (req, res) => {
+  const user = await findUserById(req.user.userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (user.totpEnabled) return res.status(400).json({ error: '2FA is already enabled. Disable it first to re-enroll.' });
+  const secret = generateSecret();
+  if (prisma) await prisma.user.update({ where: { id: user.id }, data: { totpSecret: secret } });
+  else user.totpSecret = secret;
+  res.json({ secret, otpauthUrl: otpauthUrl(secret, user.email) });
+});
+
+// Confirm enrollment with a code from the app, then return one-time recovery
+// codes (shown to the user once; only hashes are stored).
+app.post('/me/2fa/enable', auth, async (req, res) => {
+  const user = await findUserById(req.user.userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (user.totpEnabled) return res.status(400).json({ error: '2FA is already enabled.' });
+  if (!user.totpSecret) return res.status(400).json({ error: 'Start setup first.' });
+  if (!verifyTotp(user.totpSecret, String(req.body?.code || '').trim())) {
+    return res.status(400).json({ error: 'That code is incorrect — check your authenticator and try again.' });
+  }
+  const recoveryCodes = generateRecoveryCodes();
+  const hashed = recoveryCodes.map(hashRecoveryCode);
+  if (prisma) await prisma.user.update({ where: { id: user.id }, data: { totpEnabled: true, recoveryCodes: hashed } });
+  else { user.totpEnabled = true; user.recoveryCodes = hashed; }
+  res.json({ ok: true, recoveryCodes });
+});
+
+// Turn 2FA off. Requires a current code (or recovery code) to prove possession.
+app.post('/me/2fa/disable', auth, async (req, res) => {
+  const user = await findUserById(req.user.userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!user.totpEnabled) return res.json({ ok: true, twoFactorEnabled: false });
+  const entered = String(req.body?.code || '').trim();
+  const codeOk = verifyTotp(user.totpSecret, entered) || (user.recoveryCodes || []).includes(hashRecoveryCode(entered));
+  if (!codeOk) return res.status(400).json({ error: 'Enter a valid 2FA or recovery code to disable.' });
+  if (prisma) await prisma.user.update({ where: { id: user.id }, data: { totpEnabled: false, totpSecret: null, recoveryCodes: [] } });
+  else { user.totpEnabled = false; user.totpSecret = null; user.recoveryCodes = []; }
+  res.json({ ok: true, twoFactorEnabled: false });
 });
 
 // One-click unsubscribe from a transactional email footer. No auth — the

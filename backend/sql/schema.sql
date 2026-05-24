@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS "User" (
   "companyDomain"         TEXT,
   "companyVerifiedAt"     TIMESTAMPTZ,
   "companyVerifyToken"    TEXT UNIQUE,
+  "totpSecret"            TEXT,
+  "totpEnabled"           BOOLEAN NOT NULL DEFAULT FALSE,
+  "recoveryCodes"         TEXT[] NOT NULL DEFAULT '{}',
   "createdAt"             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   "updatedAt"             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

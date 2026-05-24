@@ -39,6 +39,9 @@ model User {
   companyDomain         String?
   companyVerifiedAt     DateTime?
   companyVerifyToken    String?   @unique
+  totpSecret            String?
+  totpEnabled           Boolean   @default(false)
+  recoveryCodes         String[]
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   profile               Profile?

@@ -21,6 +21,7 @@ import { isDisposableEmail } from './disposable.js';
 import { FAKE_USERS, FAKE_PASSWORD } from './fakes.js';
 import { todayKey, slugify, randomCode, effectivePlanTier, escapeHtml, isBanned, validatePassword } from './helpers.js';
 import { loginLockState, recordLoginFailure, clearLoginFailures } from './loginGuard.js';
+import { requestId, requestLogger, reportError, HAS_ERROR_REPORTING } from './observability.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -34,6 +35,11 @@ try {
 
 const app = express();
 app.set('trust proxy', 1); // honor X-Forwarded-For for rate limiting behind a proxy
+
+// Per-request id + structured request logging, before anything else so every
+// response (including errors) carries an X-Request-Id.
+app.use(requestId);
+app.use(requestLogger);
 
 // gzip JSON responses + static assets. The big wins are /discover and /search
 // payloads and the unminified script.js / styles.css.
@@ -403,6 +409,7 @@ app.get('/ops/readiness', async (_req, res) => {
     { key: 'emailDelivery', ok: !!HAS_EMAIL, required: false, detail: !!HAS_EMAIL ? 'Resend email delivery configured' : 'RESEND_API_KEY missing (dev console email mode)' },
     { key: 'cloudUpload', ok: !!HAS_CLOUD_UPLOAD, required: false, detail: !!HAS_CLOUD_UPLOAD ? 'Cloudinary upload configured' : 'CLOUDINARY_URL missing (base64 fallback mode)' },
     { key: 'pushNotifications', ok: !!webpush, required: false, detail: !!webpush ? 'Web push configured' : 'VAPID/web-push missing' },
+    { key: 'errorReporting', ok: HAS_ERROR_REPORTING, required: false, detail: HAS_ERROR_REPORTING ? 'Error webhook configured' : 'ERROR_WEBHOOK_URL missing (errors logged only)' },
   ];
 
   const criticalChecks = checks.filter((c) => c.required);
@@ -2201,10 +2208,12 @@ app.use((req, res, next) => {
 // rejections to here when the route awaits with an explicit `next(err)`,
 // but we also wire process-level catchers below for safety).
 app.use((err, req, res, _next) => {
-  console.error('[error]', req.method, req.path, '—', err?.stack || err);
+  console.error('[error]', req.id, req.method, req.path, '—', err?.stack || err);
+  reportError(err, { requestId: req.id, method: req.method, path: req.path });
   if (res.headersSent) return;
   res.status(err.status || 500).json({
     error: err.publicMessage || err.message || 'Server error',
+    requestId: req.id,
   });
 });
 
@@ -2214,9 +2223,11 @@ app.use((err, req, res, _next) => {
 // us cleanly.
 process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
+  reportError(err, { kind: 'unhandledRejection' });
 });
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err);
+  reportError(err, { kind: 'uncaughtException' });
   process.exit(1);
 });
 

@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS "User" (
   "bannedAt"              TIMESTAMPTZ,
   "bannedUntil"           TIMESTAMPTZ,
   "banReason"             TEXT,
+  "companyEmail"          TEXT,
+  "companyDomain"         TEXT,
+  "companyVerifiedAt"     TIMESTAMPTZ,
+  "companyVerifyToken"    TEXT UNIQUE,
   "createdAt"             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   "updatedAt"             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

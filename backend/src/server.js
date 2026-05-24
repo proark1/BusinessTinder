@@ -14,12 +14,12 @@ import { moderateText, moderateImage } from './moderation.js';
 import { suggestIcebreakers } from './icebreakers.js';
 import { rateLimit } from './rateLimit.js';
 import { PROMPTS, normalizePrompts, mutualHighlights } from './prompts.js';
-import { sendVerifyEmail, sendResetEmail, sendMatchEmail, sendMessageDigestEmail, HAS_EMAIL } from './email.js';
+import { sendVerifyEmail, sendResetEmail, sendMatchEmail, sendMessageDigestEmail, sendCompanyVerifyEmail, HAS_EMAIL } from './email.js';
 import { geocode, distanceKm, normalizeLocation } from './geocode.js';
 import { uploadDataUrl, HAS_CLOUD_UPLOAD } from './upload.js';
 import { isDisposableEmail } from './disposable.js';
 import { FAKE_USERS, FAKE_PASSWORD } from './fakes.js';
-import { todayKey, slugify, randomCode, effectivePlanTier, escapeHtml, isBanned, validatePassword } from './helpers.js';
+import { todayKey, slugify, randomCode, effectivePlanTier, escapeHtml, isBanned, validatePassword, emailDomain, isFreeEmailDomain } from './helpers.js';
 import { loginLockState, recordLoginFailure, clearLoginFailures } from './loginGuard.js';
 import { requestId, requestLogger, reportError, HAS_ERROR_REPORTING } from './observability.js';
 
@@ -230,6 +230,8 @@ function publicUser(user) {
     emailVerified: !!user.emailVerified,
     verified: !!user.verified,
     emailOptOut: !!user.notifEmailOptOut,
+    companyVerified: !!user.companyVerifiedAt,
+    companyDomain: user.companyDomain || null,
     isAdmin: isAdminEmail(user.email),
   };
 }
@@ -890,7 +892,7 @@ app.get('/discover', auth, async (req, res) => {
         // Hide banned / actively-suspended owners.
         user: { OR: [{ bannedAt: null }, { bannedUntil: { lte: new Date() } }] },
       },
-      include: { user: { select: { fullName: true, avatarUrl: true } } },
+      include: { user: { select: { fullName: true, avatarUrl: true, companyVerifiedAt: true, companyDomain: true } } },
       orderBy: { lastActiveAt: 'desc' },
       take: DISCOVER_LIMIT,
     });
@@ -906,7 +908,7 @@ app.get('/discover', auth, async (req, res) => {
       .filter((p) => p.userId !== mine && !swiped.has(p.userId) && !blocked.has(p.userId) && !isBanned(usersById.get(p.userId)))
       .map((p) => {
         const u = usersById.get(p.userId);
-        return { ...p, user: { fullName: u?.fullName, avatarUrl: u?.avatarUrl } };
+        return { ...p, user: { fullName: u?.fullName, avatarUrl: u?.avatarUrl, companyVerifiedAt: u?.companyVerifiedAt, companyDomain: u?.companyDomain } };
       });
     if (filters.stage) filtered = filtered.filter((p) => p.stage === filters.stage);
     if (filters.lookingFor) filtered = filtered.filter((p) => (p.lookingFor || []).includes(filters.lookingFor));
@@ -963,6 +965,8 @@ app.get('/discover', auth, async (req, res) => {
       ...profile,
       fullName: profile.user?.fullName,
       avatarUrl: profile.photoUrl || profile.avatarUrl || profile.user?.avatarUrl,
+      companyVerified: !!profile.user?.companyVerifiedAt,
+      companyDomain: profile.user?.companyDomain || null,
       matchScore: score,
       matchReasons: reasons,
       mutualHighlights: mutualHighlights(meProfile, profile),
@@ -1070,7 +1074,8 @@ app.get('/search', auth, async (req, res) => {
     // still match. Escape LIKE metacharacters so a stray % or _ stays literal.
     const pattern = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
     const rows = await prisma.$queryRaw`
-      SELECT p.*, u."fullName" AS "ownerName", u."avatarUrl" AS "ownerAvatar"
+      SELECT p.*, u."fullName" AS "ownerName", u."avatarUrl" AS "ownerAvatar",
+             u."companyVerifiedAt" AS "ownerCompanyVerifiedAt", u."companyDomain" AS "ownerCompanyDomain"
       FROM "Profile" p
       JOIN "User" u ON u."id" = p."userId"
       WHERE p."userId" <> ${meId}
@@ -1085,10 +1090,12 @@ app.get('/search', auth, async (req, res) => {
       ORDER BY p."lastActiveAt" DESC
       LIMIT ${SEARCH_LIMIT}
     `;
-    return res.json(rows.map(({ ownerName, ownerAvatar, ...p }) => ({
+    return res.json(rows.map(({ ownerName, ownerAvatar, ownerCompanyVerifiedAt, ownerCompanyDomain, ...p }) => ({
       ...p,
       fullName: ownerName,
       avatarUrl: p.photoUrl || p.avatarUrl || ownerAvatar,
+      companyVerified: !!ownerCompanyVerifiedAt,
+      companyDomain: ownerCompanyDomain || null,
     })));
   }
 
@@ -1105,7 +1112,7 @@ app.get('/search', auth, async (req, res) => {
       (p.pastCompanies || []).join(' '),
     ].filter(Boolean).join(' ').toLowerCase();
     if (!hay.includes(q)) continue;
-    out.push({ ...p, fullName: owner?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || owner?.avatarUrl });
+    out.push({ ...p, fullName: owner?.fullName, avatarUrl: p.photoUrl || p.avatarUrl || owner?.avatarUrl, companyVerified: !!owner?.companyVerifiedAt, companyDomain: owner?.companyDomain || null });
     if (out.length >= SEARCH_LIMIT) break;
   }
   res.json(out);
@@ -1852,6 +1859,47 @@ app.post('/me/notifications', auth, async (req, res) => {
     if (u) u.notifEmailOptOut = emailOptOut;
   }
   res.json({ ok: true, emailOptOut });
+});
+
+// Start work-email verification: store the address + a token and email a
+// confirmation link. Requires a real, non-free, non-disposable work domain so
+// the resulting badge actually means something.
+app.post('/me/company-email', auth, async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const domain = emailDomain(email);
+  if (!domain) return res.status(400).json({ error: 'Enter a valid work email.' });
+  if (isDisposableEmail(email) || isFreeEmailDomain(email)) {
+    return res.status(400).json({ error: 'Use your company email — free/disposable providers don\'t qualify.' });
+  }
+  const me = await findUserById(req.user.userId);
+  if (!me) return res.status(404).json({ error: 'User not found' });
+  const token = randomCode(24);
+  if (prisma) {
+    await prisma.user.update({ where: { id: me.id }, data: { companyEmail: email, companyVerifyToken: token, companyVerifiedAt: null, companyDomain: null } });
+  } else {
+    me.companyEmail = email; me.companyVerifyToken = token; me.companyVerifiedAt = null; me.companyDomain = null;
+  }
+  const verifyPath = `/company/verify?token=${token}`;
+  sendCompanyVerifyEmail(email, me.fullName, verifyPath).catch((err) => console.warn('[email] company-verify', err?.message));
+  const verifyUrl = NODE_ENV === 'production' && HAS_EMAIL ? undefined : verifyPath;
+  res.json({ ok: true, companyDomain: domain, verifyUrl });
+});
+
+// Confirm a work email from the emailed link. No auth — the token authorizes.
+app.get('/company/verify', async (req, res) => {
+  const token = String(req.query.token || '');
+  if (!token) return res.status(400).send('Missing token');
+  let user;
+  if (prisma) user = await prisma.user.findUnique({ where: { companyVerifyToken: token } });
+  else user = mem.users.find((u) => u.companyVerifyToken === token);
+  if (!user) return res.status(404).send('Invalid or expired link');
+  const domain = emailDomain(user.companyEmail);
+  if (prisma) {
+    await prisma.user.update({ where: { id: user.id }, data: { companyVerifiedAt: new Date(), companyDomain: domain, companyVerifyToken: null } });
+  } else {
+    user.companyVerifiedAt = new Date().toISOString(); user.companyDomain = domain; user.companyVerifyToken = null;
+  }
+  res.redirect('/?companyVerified=1');
 });
 
 // One-click unsubscribe from a transactional email footer. No auth — the

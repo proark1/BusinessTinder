@@ -661,6 +661,7 @@ p, li {
 }
 
 .verified-pill { display: inline-flex; align-items: center; gap: 4px; background: rgba(40, 216, 146, 0.18); color: var(--good); border: 1px solid rgba(40, 216, 146, 0.4); border-radius: 999px; padding: 2px 7px; font-size: .7rem; font-weight: 700; margin-left: 6px; vertical-align: middle; }
+.company-pill { display: inline-flex; align-items: center; gap: 4px; background: var(--brand-soft); color: var(--brand-1); border: 1px solid rgba(30, 64, 175, 0.4); border-radius: 999px; padding: 2px 7px; font-size: .7rem; font-weight: 700; margin-left: 6px; vertical-align: middle; }
 
 .pro-feature-list { list-style: none; padding: 0; }
 .pro-feature-list li { display: flex; gap: 8px; align-items: center; padding: 4px 0; color: var(--text); }

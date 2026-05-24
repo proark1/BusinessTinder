@@ -321,6 +321,13 @@ function renderCard(p, index, total) {
     span.textContent = "✓ verified";
     h2.appendChild(span);
   }
+  if (p.companyVerified) {
+    const h2 = node.querySelector("h2");
+    const span = document.createElement("span");
+    span.className = "company-pill";
+    span.textContent = p.companyDomain ? `🏢 ${p.companyDomain}` : "🏢 verified";
+    h2.appendChild(span);
+  }
   // Mutual highlights chips (server-supplied)
   if (Array.isArray(p.mutualHighlights) && p.mutualHighlights.length) {
     const row = document.createElement("div");
@@ -431,7 +438,7 @@ function openDetail(p) {
   const lastTier = lastActiveTier(p.lastActiveAt);
   const lastHtml = lastTier ? `<span class="last-active ${lastTier.cls}">${esc(lastTier.label)}</span>` : "";
   qs("detailBody").innerHTML = `
-    <h2>${esc(p.fullName || "")}${p.verified ? ` <span class="verified-pill">✓ verified</span>` : ""}</h2>
+    <h2>${esc(p.fullName || "")}${p.verified ? ` <span class="verified-pill">✓ verified</span>` : ""}${p.companyVerified ? ` <span class="company-pill">🏢 ${esc(p.companyDomain || "verified")}</span>` : ""}</h2>
     <p class="role">${esc(p.headline || "")}</p>
     <p class="meta">${esc(describeUserType(p.userType))} · ${esc(describeStage(p.stage))} · ${esc(p.location || "")}${p.remoteOk ? " · Remote OK" : ""} ${lastHtml}</p>
     ${mutualHtml}
@@ -1215,6 +1222,7 @@ function updateChrome() {
   qs("settingsReferral").textContent = state.user?.referralCode || "—";
   qs("settingsEmail").textContent = state.user?.email || "—";
   renderEmailNotifBtn();
+  renderCompanyVerifyRow();
   if (state.profile?.slug) {
     const link = `${API_BASE}/u/${state.profile.slug}`;
     qs("publicProfileLink").href = link;
@@ -1248,6 +1256,12 @@ function updateChrome() {
     showToast("Email verified ✓");
     state.pendingVerifyUrl = null;
     history.replaceState({}, "", location.pathname);
+  }
+  // Auto-detect ?companyVerified=1 redirect from the work-email link.
+  if (new URLSearchParams(location.search).get("companyVerified") === "1") {
+    showToast("Work email verified 🏢");
+    history.replaceState({}, "", location.pathname);
+    fetchMeWithToken(state.token).then((me) => { state.user = me.user; renderCompanyVerifyRow(); }).catch(() => {});
   }
 }
 
@@ -2047,6 +2061,31 @@ qs("emailNotifBtn")?.addEventListener("click", async () => {
     if (state.user) state.user.emailOptOut = r.emailOptOut;
     renderEmailNotifBtn();
     showToast(r.emailOptOut ? "Activity emails off" : "Activity emails on");
+  } catch (e) { showToast(e.message); }
+});
+
+function renderCompanyVerifyRow() {
+  const btn = qs("companyVerifyBtn");
+  const status = qs("companyVerifyStatus");
+  if (!btn || !status) return;
+  if (state.user?.companyVerified) {
+    status.textContent = `Verified${state.user.companyDomain ? ` · ${state.user.companyDomain}` : ""} ✓`;
+    btn.textContent = "Re-verify";
+  } else {
+    status.textContent = "Verify your company email for a trust badge";
+    btn.textContent = "Verify";
+  }
+}
+qs("companyVerifyBtn")?.addEventListener("click", async () => {
+  const email = prompt("Enter your work email (not a free provider like gmail):");
+  if (!email) return;
+  try {
+    const r = await api("/me/company-email", { method: "POST", body: JSON.stringify({ email: email.trim() }) });
+    if (r.verifyUrl) {
+      // Dev mode: no real email sent — surface the link so the flow completes.
+      if (confirm("Dev mode: open the verification link now?")) { location.href = r.verifyUrl; return; }
+    }
+    showToast("Verification email sent to your work address");
   } catch (e) { showToast(e.message); }
 });
 window.addEventListener("beforeinstallprompt", (e) => {

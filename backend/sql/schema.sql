@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS "User" (
   "revealedLikerIds"      TEXT[] NOT NULL DEFAULT '{}',
   "boostUntil"            TIMESTAMPTZ,
   "lastBoostDay"          TEXT,
+  "bannedAt"              TIMESTAMPTZ,
+  "bannedUntil"           TIMESTAMPTZ,
+  "banReason"             TEXT,
   "createdAt"             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   "updatedAt"             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -124,12 +127,16 @@ CREATE TABLE IF NOT EXISTS "SavedProfile" (
 );
 
 CREATE TABLE IF NOT EXISTS "Report" (
-  "id"         TEXT PRIMARY KEY,
-  "reporterId" TEXT NOT NULL,
-  "targetId"   TEXT NOT NULL,
-  "reason"     TEXT,
-  "createdAt"  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  "id"           TEXT PRIMARY KEY,
+  "reporterId"   TEXT NOT NULL,
+  "targetId"     TEXT NOT NULL,
+  "reason"       TEXT,
+  "status"       TEXT NOT NULL DEFAULT 'OPEN',
+  "reviewedAt"   TIMESTAMPTZ,
+  "reviewedById" TEXT,
+  "createdAt"    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS "Report_status_createdAt_idx" ON "Report" ("status", "createdAt");
 
 CREATE TABLE IF NOT EXISTS "Block" (
   "id"        TEXT PRIMARY KEY,

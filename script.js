@@ -1889,17 +1889,45 @@ async function openAdminModal() {
     (q.recentUsers || []).slice(0, 20).forEach((u) => {
       const row = document.createElement("div");
       row.className = "admin-row";
-      row.innerHTML = `<div><strong></strong><div class="settings-sub"></div></div><button class="ghost" type="button"></button>`;
+      row.innerHTML = `<div><strong></strong><div class="settings-sub"></div></div><div class="admin-actions"><button class="ghost" data-act="verify" type="button"></button><button class="ghost" data-act="ban" type="button"></button></div>`;
       row.querySelector("strong").textContent = u.fullName || u.email;
-      row.querySelector(".settings-sub").textContent = `${u.email}${u.emailVerified ? " · email ✓" : ""}${u.verified ? " · verified ✓" : ""}`;
-      const btn = row.querySelector("button");
-      btn.textContent = u.verified ? "Unverify" : "Verify";
-      btn.addEventListener("click", async () => {
+      const sub = row.querySelector(".settings-sub");
+      const renderSub = () => {
+        sub.textContent = `${u.email}${u.emailVerified ? " · email ✓" : ""}${u.verified ? " · verified ✓" : ""}${u.banned ? " · BANNED" : ""}`;
+      };
+      renderSub();
+      const verifyBtn = row.querySelector('[data-act="verify"]');
+      verifyBtn.textContent = u.verified ? "Unverify" : "Verify";
+      verifyBtn.addEventListener("click", async () => {
         try {
           await api("/admin/verify", { method: "POST", body: JSON.stringify({ userId: u.id, verified: !u.verified }) });
           u.verified = !u.verified;
-          btn.textContent = u.verified ? "Unverify" : "Verify";
+          verifyBtn.textContent = u.verified ? "Unverify" : "Verify";
+          renderSub();
           showToast(u.verified ? "Verified" : "Unverified");
+        } catch (e) { alert(e.message); }
+      });
+      const banBtn = row.querySelector('[data-act="ban"]');
+      const renderBan = () => {
+        banBtn.textContent = u.banned ? "Unban" : "Ban";
+        banBtn.classList.toggle("danger", !u.banned);
+      };
+      renderBan();
+      banBtn.addEventListener("click", async () => {
+        try {
+          if (u.banned) {
+            await api("/admin/unban", { method: "POST", body: JSON.stringify({ userId: u.id }) });
+            u.banned = false;
+            showToast("Unbanned");
+          } else {
+            const reason = prompt("Ban reason (optional):") || undefined;
+            const daysRaw = (prompt("Suspend for how many days? Leave blank for permanent.") || "").trim();
+            const days = daysRaw ? Number(daysRaw) : undefined;
+            await api("/admin/ban", { method: "POST", body: JSON.stringify({ userId: u.id, reason, days }) });
+            u.banned = true;
+            showToast("Banned");
+          }
+          renderBan(); renderSub();
         } catch (e) { alert(e.message); }
       });
       body.appendChild(row);
@@ -1911,9 +1939,33 @@ async function openAdminModal() {
     (q.reports || []).slice(0, 20).forEach((r) => {
       const div = document.createElement("div");
       div.className = "admin-row";
-      div.innerHTML = `<div><strong></strong><div class="settings-sub"></div></div>`;
+      div.innerHTML = `<div><strong></strong><div class="settings-sub"></div></div><div class="admin-actions"></div>`;
       div.querySelector("strong").textContent = `Report on user ${r.targetId.slice(0, 8)}…`;
-      div.querySelector(".settings-sub").textContent = r.reason || "(no reason)";
+      const sub = div.querySelector(".settings-sub");
+      const status = r.status || "OPEN";
+      const renderSub = (s) => { sub.textContent = `${r.reason || "(no reason)"} · ${s}`; };
+      renderSub(status);
+      const actions = div.querySelector(".admin-actions");
+      if (status === "OPEN") {
+        const dismiss = document.createElement("button");
+        dismiss.className = "ghost"; dismiss.type = "button"; dismiss.textContent = "Dismiss";
+        dismiss.addEventListener("click", async () => {
+          try {
+            await api(`/admin/reports/${r.id}/resolve`, { method: "POST", body: JSON.stringify({ status: "DISMISSED" }) });
+            renderSub("DISMISSED"); actions.innerHTML = ""; showToast("Dismissed");
+          } catch (e) { alert(e.message); }
+        });
+        const ban = document.createElement("button");
+        ban.className = "ghost danger"; ban.type = "button"; ban.textContent = "Ban user";
+        ban.addEventListener("click", async () => {
+          try {
+            const reason = prompt("Ban reason (optional):") || undefined;
+            await api("/admin/ban", { method: "POST", body: JSON.stringify({ userId: r.targetId, reason }) });
+            renderSub("ACTIONED"); actions.innerHTML = ""; showToast("User banned");
+          } catch (e) { alert(e.message); }
+        });
+        actions.append(dismiss, ban);
+      }
       body.appendChild(div);
     });
     if (!q.recentUsers?.length && !q.reports?.length) body.innerHTML = `<p class="hint">Queue empty.</p>`;

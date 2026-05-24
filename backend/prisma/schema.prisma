@@ -32,6 +32,9 @@ model User {
   revealedLikerIds      String[]
   boostUntil            DateTime?
   lastBoostDay          String?
+  bannedAt              DateTime?
+  bannedUntil           DateTime?
+  banReason             String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   profile               Profile?
@@ -137,11 +140,16 @@ model SavedProfile {
 }
 
 model Report {
-  id         String   @id @default(cuid())
-  reporterId String
-  targetId   String
-  reason     String?
-  createdAt  DateTime @default(now())
+  id           String   @id @default(cuid())
+  reporterId   String
+  targetId     String
+  reason       String?
+  status       String   @default("OPEN")
+  reviewedAt   DateTime?
+  reviewedById String?
+  createdAt    DateTime @default(now())
+
+  @@index([status, createdAt])
 }
 
 model Block {

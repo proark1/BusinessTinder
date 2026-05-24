@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OAuth2Client } from 'google-auth-library';
 import { scoreProfile, rankProfiles, diversify } from './scoring.js';
-import { moderateText } from './moderation.js';
+import { moderateText, moderateImage } from './moderation.js';
 import { suggestIcebreakers } from './icebreakers.js';
 import { rateLimit } from './rateLimit.js';
 import { PROMPTS, normalizePrompts, mutualHighlights } from './prompts.js';
@@ -19,7 +19,7 @@ import { geocode, distanceKm, normalizeLocation } from './geocode.js';
 import { uploadDataUrl, HAS_CLOUD_UPLOAD } from './upload.js';
 import { isDisposableEmail } from './disposable.js';
 import { FAKE_USERS, FAKE_PASSWORD } from './fakes.js';
-import { isPhotoDataUrlSafe, todayKey, slugify, randomCode, effectivePlanTier, escapeHtml } from './helpers.js';
+import { todayKey, slugify, randomCode, effectivePlanTier, escapeHtml, isBanned } from './helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -101,9 +101,17 @@ const FREE_DAILY_LIKE_REVEALS = Number(process.env.FREE_DAILY_LIKE_REVEALS || 1)
 const DISCOVER_LIMIT = Number(process.env.DISCOVER_LIMIT || 200);
 // Cap search results returned to the client.
 const SEARCH_LIMIT = Number(process.env.SEARCH_LIMIT || 50);
-const ADMIN_EMAILS = new Set(
-  (process.env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
-);
+// Read ADMIN_EMAILS live (memoized on the raw string) so admin access can be
+// changed without a restart, and so tests can set it before exercising the
+// admin routes regardless of module-load order.
+let _adminCache = { raw: null, set: new Set() };
+function isAdminEmail(email) {
+  const raw = process.env.ADMIN_EMAILS || '';
+  if (raw !== _adminCache.raw) {
+    _adminCache = { raw, set: new Set(raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)) };
+  }
+  return _adminCache.set.has(String(email || '').toLowerCase());
+}
 const APP_URL = process.env.APP_URL || '';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
@@ -215,7 +223,7 @@ function publicUser(user) {
     emailVerified: !!user.emailVerified,
     verified: !!user.verified,
     emailOptOut: !!user.notifEmailOptOut,
-    isAdmin: ADMIN_EMAILS.has(String(user.email || '').toLowerCase()),
+    isAdmin: isAdminEmail(user.email),
   };
 }
 
@@ -242,6 +250,12 @@ function verifyUnsubToken(userId, token) {
 // this recipient. Verification + password-reset emails always send regardless.
 function wantsActivityEmail(user) {
   return !!user && !user.notifEmailOptOut;
+}
+
+function banMessage(user) {
+  const until = user?.bannedUntil ? ` until ${new Date(user.bannedUntil).toISOString().slice(0, 10)}` : '';
+  const reason = user?.banReason ? ` Reason: ${user.banReason}` : '';
+  return `Your account has been suspended${until}.${reason}`;
 }
 
 function auth(req, res, next) {
@@ -483,6 +497,7 @@ app.post('/auth/login', limits.authStrict, async (req, res) => {
   if (!user || !user.passwordHash) return res.status(401).json({ error: 'Invalid credentials' });
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  if (isBanned(user)) return res.status(403).json({ error: banMessage(user) });
   res.json({ token: sign(user), user: publicUser(user) });
 });
 
@@ -530,6 +545,7 @@ app.post('/auth/google', limits.authStrict, async (req, res) => {
       user.avatarUrl = user.avatarUrl || avatarUrl;
     }
   }
+  if (isBanned(user)) return res.status(403).json({ error: banMessage(user) });
   res.json({ token: sign(user), user: publicUser(user) });
 });
 
@@ -645,9 +661,10 @@ function sanitizeProfile(body) {
   if (Array.isArray(out.photos)) {
     out.photos = out.photos.filter(Boolean).slice(0, 5);
     for (const p of out.photos) {
-      if (!isPhotoDataUrlSafe(p) && !/^https?:\/\//.test(p)) {
-        return { error: 'Photos must be PNG/JPEG/WebP (base64 data URL) or https URLs.' };
-      }
+      // moderateImage trusts https URLs and verifies data-URL bytes match their
+      // declared type (rejecting SVG, mislabeled, or non-image payloads).
+      const mod = moderateImage(p);
+      if (!mod.ok) return { error: `Photo rejected: ${mod.reason}` };
     }
   }
   if (Array.isArray(out.photos) && out.photos.length && !out.photoUrl) out.photoUrl = out.photos[0];
@@ -749,7 +766,8 @@ app.patch('/profiles', auth, async (req, res) => {
 app.post('/upload', auth, limits.general, async (req, res) => {
   const { dataUrl, folder } = req.body || {};
   if (!dataUrl || typeof dataUrl !== 'string') return res.status(400).json({ error: 'dataUrl required' });
-  if (!isPhotoDataUrlSafe(dataUrl)) return res.status(400).json({ error: 'Only PNG/JPEG/WebP images are supported.' });
+  const imgMod = moderateImage(dataUrl);
+  if (!imgMod.ok) return res.status(400).json({ error: `Image rejected: ${imgMod.reason}` });
   // 4MB cap on the raw base64 payload — generous for a photo, small enough not to abuse Cloudinary.
   if (dataUrl.length > 4 * 1024 * 1024) return res.status(413).json({ error: 'Image too large (max ~3MB).' });
   if (!HAS_CLOUD_UPLOAD) {
@@ -799,6 +817,8 @@ app.get('/discover', auth, async (req, res) => {
         lookingFor: filters.lookingFor ? { has: filters.lookingFor } : undefined,
         industries: filters.industry ? { has: filters.industry } : undefined,
         location: filters.location ? { contains: filters.location, mode: 'insensitive' } : undefined,
+        // Hide banned / actively-suspended owners.
+        user: { OR: [{ bannedAt: null }, { bannedUntil: { lte: new Date() } }] },
       },
       include: { user: { select: { fullName: true, avatarUrl: true } } },
       orderBy: { lastActiveAt: 'desc' },
@@ -813,7 +833,7 @@ app.get('/discover', auth, async (req, res) => {
       if (b.targetId === mine) blocked.add(b.blockerId);
     }
     filtered = mem.profiles
-      .filter((p) => p.userId !== mine && !swiped.has(p.userId) && !blocked.has(p.userId))
+      .filter((p) => p.userId !== mine && !swiped.has(p.userId) && !blocked.has(p.userId) && !isBanned(usersById.get(p.userId)))
       .map((p) => {
         const u = usersById.get(p.userId);
         return { ...p, user: { fullName: u?.fullName, avatarUrl: u?.avatarUrl } };
@@ -984,6 +1004,7 @@ app.get('/search', auth, async (req, res) => {
       FROM "Profile" p
       JOIN "User" u ON u."id" = p."userId"
       WHERE p."userId" <> ${meId}
+        AND (u."bannedAt" IS NULL OR u."bannedUntil" <= NOW())
         AND (
           COALESCE(p."headline", '') || ' ' || COALESCE(p."bio", '') || ' ' ||
           COALESCE(p."location", '') || ' ' || COALESCE(u."fullName", '') || ' ' ||
@@ -1006,6 +1027,7 @@ app.get('/search', auth, async (req, res) => {
   for (const p of mem.profiles) {
     if (p.userId === meId) continue;
     const owner = usersById.get(p.userId);
+    if (isBanned(owner)) continue;
     const hay = [
       p.headline, p.bio, p.location, owner?.fullName,
       (p.industries || []).join(' '),
@@ -1027,6 +1049,7 @@ app.post('/swipes', auth, limits.swipe, async (req, res) => {
 
   // Daily quota for FREE plan.
   const user = await findUserById(fromUserId);
+  if (isBanned(user)) return res.status(403).json({ error: banMessage(user) });
   if (effectivePlanTier(user) !== 'PRO') {
     const today = todayKey();
     const day = user.lastSwipeDay || null;
@@ -1231,7 +1254,7 @@ app.post('/likes/reveal', auth, limits.general, async (req, res) => {
 // Admin verification. Flips the `verified` badge on a target user. Gated by
 // the ADMIN_EMAILS env var — no public route exists for users to self-verify.
 function isAdminUser(user) {
-  return !!user && ADMIN_EMAILS.has(String(user.email || '').toLowerCase());
+  return !!user && isAdminEmail(user.email);
 }
 
 app.post('/admin/verify', auth, async (req, res) => {
@@ -1245,6 +1268,73 @@ app.post('/admin/verify', auth, async (req, res) => {
     if (u) u.verified = !!verified;
   }
   res.json({ ok: true });
+});
+
+// Ban (or timed-suspend) a user. `days` omitted/null = permanent. Also closes
+// any of the target's still-open reports as ACTIONED.
+app.post('/admin/ban', auth, async (req, res) => {
+  const me = await findUserById(req.user.userId);
+  if (!isAdminUser(me)) return res.status(403).json({ error: 'Admin only' });
+  const { userId, days, reason } = req.body || {};
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  if (userId === me.id) return res.status(400).json({ error: 'You cannot ban yourself.' });
+  const bannedAt = new Date();
+  const numDays = Number(days);
+  const bannedUntil = Number.isFinite(numDays) && numDays > 0
+    ? new Date(Date.now() + numDays * 86400_000) : null;
+  const banReason = reason ? String(reason).slice(0, 280) : null;
+  if (prisma) {
+    await prisma.user.update({ where: { id: userId }, data: { bannedAt, bannedUntil, banReason } });
+    await prisma.report.updateMany({
+      where: { targetId: userId, status: 'OPEN' },
+      data: { status: 'ACTIONED', reviewedAt: new Date(), reviewedById: me.id },
+    });
+  } else {
+    const u = mem.users.find((x) => x.id === userId);
+    if (!u) return res.status(404).json({ error: 'User not found' });
+    u.bannedAt = bannedAt.toISOString();
+    u.bannedUntil = bannedUntil ? bannedUntil.toISOString() : null;
+    u.banReason = banReason;
+    for (const r of mem.reports) {
+      if (r.targetId === userId && (r.status || 'OPEN') === 'OPEN') {
+        r.status = 'ACTIONED'; r.reviewedAt = new Date().toISOString(); r.reviewedById = me.id;
+      }
+    }
+  }
+  res.json({ ok: true, bannedUntil: bannedUntil ? bannedUntil.toISOString() : null });
+});
+
+app.post('/admin/unban', auth, async (req, res) => {
+  const me = await findUserById(req.user.userId);
+  if (!isAdminUser(me)) return res.status(403).json({ error: 'Admin only' });
+  const { userId } = req.body || {};
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  if (prisma) {
+    await prisma.user.update({ where: { id: userId }, data: { bannedAt: null, bannedUntil: null, banReason: null } });
+  } else {
+    const u = mem.users.find((x) => x.id === userId);
+    if (u) { u.bannedAt = null; u.bannedUntil = null; u.banReason = null; }
+  }
+  res.json({ ok: true });
+});
+
+// Resolve a report without banning (dismiss as not-actionable, or mark actioned).
+app.post('/admin/reports/:id/resolve', auth, async (req, res) => {
+  const me = await findUserById(req.user.userId);
+  if (!isAdminUser(me)) return res.status(403).json({ error: 'Admin only' });
+  const status = ['DISMISSED', 'ACTIONED', 'OPEN'].includes(req.body?.status) ? req.body.status : 'DISMISSED';
+  const { id } = req.params;
+  if (prisma) {
+    await prisma.report.update({
+      where: { id },
+      data: { status, reviewedAt: new Date(), reviewedById: me.id },
+    });
+  } else {
+    const r = mem.reports.find((x) => x.id === id);
+    if (!r) return res.status(404).json({ error: 'Report not found' });
+    r.status = status; r.reviewedAt = new Date().toISOString(); r.reviewedById = me.id;
+  }
+  res.json({ ok: true, status });
 });
 
 // Seed a small cast of demo profiles so the admin can swipe through a varied
@@ -1358,15 +1448,23 @@ app.get('/admin/queue', auth, async (req, res) => {
   if (!isAdminUser(me)) return res.status(403).json({ error: 'Admin only' });
   if (prisma) {
     const [reports, recentUsers] = await Promise.all([
-      prisma.report.findMany({ orderBy: { createdAt: 'desc' }, take: 50 }),
-      prisma.user.findMany({ orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, email: true, fullName: true, verified: true, emailVerified: true, createdAt: true } }),
+      // Open reports first, then most-recent.
+      prisma.report.findMany({ orderBy: [{ status: 'asc' }, { createdAt: 'desc' }], take: 50 }),
+      prisma.user.findMany({ orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, email: true, fullName: true, verified: true, emailVerified: true, bannedAt: true, bannedUntil: true, banReason: true, createdAt: true } }),
     ]);
-    return res.json({ reports, recentUsers });
+    return res.json({ reports, recentUsers: recentUsers.map((u) => ({ ...u, banned: isBanned(u) })) });
   }
+  const reports = [...mem.reports].sort((a, b) => {
+    const sa = (a.status || 'OPEN') === 'OPEN' ? 0 : 1;
+    const sb = (b.status || 'OPEN') === 'OPEN' ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+    return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+  }).slice(0, 50);
   res.json({
-    reports: mem.reports.slice(-50).reverse(),
+    reports: reports.map((r) => ({ status: 'OPEN', ...r })),
     recentUsers: mem.users.slice(-50).reverse().map((u) => ({
-      id: u.id, email: u.email, fullName: u.fullName, verified: !!u.verified, emailVerified: !!u.emailVerified, createdAt: u.createdAt,
+      id: u.id, email: u.email, fullName: u.fullName, verified: !!u.verified, emailVerified: !!u.emailVerified,
+      bannedAt: u.bannedAt || null, bannedUntil: u.bannedUntil || null, banReason: u.banReason || null, banned: isBanned(u), createdAt: u.createdAt,
     })),
   });
 });
@@ -1497,13 +1595,14 @@ app.post('/messages/:conversationId', auth, limits.message, async (req, res) => 
   if (!body) return res.status(400).json({ error: 'Missing body' });
   const safeKind = ['text', 'image'].includes(kind) ? kind : 'text';
   if (safeKind === 'image') {
-    if (!/^https?:\/\//i.test(String(body)) && !isPhotoDataUrlSafe(body)) {
-      return res.status(400).json({ error: 'Image must be an https URL or PNG/JPEG/WebP data URL.' });
-    }
+    const mod = moderateImage(body);
+    if (!mod.ok) return res.status(400).json({ error: `Image rejected: ${mod.reason}` });
   } else {
     const mod = moderateText(body);
     if (!mod.ok) return res.status(400).json({ error: `Message blocked: ${mod.reason}` });
   }
+  const sender = await findUserById(req.user.userId);
+  if (isBanned(sender)) return res.status(403).json({ error: banMessage(sender) });
   if (!(await canAccessConversation(req.user.userId, conversationId))) {
     return res.status(403).json({ error: 'Forbidden' });
   }
@@ -1651,7 +1750,7 @@ app.post('/reports', auth, async (req, res) => {
       update: {}, create: { blockerId: meId, targetId },
     });
   } else {
-    mem.reports.push({ id: crypto.randomUUID(), reporterId: meId, targetId, reason: reason || null, createdAt: new Date().toISOString() });
+    mem.reports.push({ id: crypto.randomUUID(), reporterId: meId, targetId, reason: reason || null, status: 'OPEN', createdAt: new Date().toISOString() });
     if (!mem.blocks.find((b) => b.blockerId === meId && b.targetId === targetId)) {
       mem.blocks.push({ id: crypto.randomUUID(), blockerId: meId, targetId, createdAt: new Date().toISOString() });
     }
@@ -2099,14 +2198,19 @@ wss.on('connection', (ws, req) => {
         if (!body) return ws.send(JSON.stringify({ type: 'error', error: 'Empty message' }));
         const safeKind = ['text', 'image'].includes(kind) ? kind : 'text';
         if (safeKind === 'image') {
-          if (!/^https?:\/\//i.test(String(body)) && !isPhotoDataUrlSafe(body)) {
-            return ws.send(JSON.stringify({ type: 'error', error: 'Invalid image' }));
+          const mod = moderateImage(body);
+          if (!mod.ok) {
+            return ws.send(JSON.stringify({ type: 'error', error: `Image rejected: ${mod.reason}` }));
           }
         } else {
           const mod = moderateText(body);
           if (!mod.ok) {
             return ws.send(JSON.stringify({ type: 'error', error: `Blocked: ${mod.reason}` }));
           }
+        }
+        const sender = await findUserById(userId);
+        if (isBanned(sender)) {
+          return ws.send(JSON.stringify({ type: 'error', error: 'Account suspended' }));
         }
         if (!(await canAccessConversation(userId, conversationId))) {
           return ws.send(JSON.stringify({ type: 'error', error: 'Forbidden conversation' }));

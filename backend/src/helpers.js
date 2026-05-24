@@ -66,3 +66,22 @@ export function isBanned(user) {
   if (!user.bannedUntil) return true;
   return new Date(user.bannedUntil).getTime() > Date.now();
 }
+
+export const MIN_PASSWORD_LENGTH = 8;
+// A small set of obviously-weak passwords we reject outright. Not a full
+// breach list — just the long tail of "password123" style choices.
+const COMMON_PASSWORDS = new Set([
+  'password', 'password1', 'password123', '12345678', '123456789', '1234567890',
+  'qwerty', 'qwertyui', 'qwerty123', 'letmein', 'welcome', 'welcome1', 'admin123',
+  'iloveyou', 'abc12345', 'football', 'baseball', 'sunshine', 'princess', 'changeme',
+]);
+
+// Validate a new password. Returns { ok } or { ok:false, reason }.
+export function validatePassword(pw) {
+  if (typeof pw !== 'string') return { ok: false, reason: 'Password is required.' };
+  if (pw.length < MIN_PASSWORD_LENGTH) return { ok: false, reason: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
+  if (pw.length > 200) return { ok: false, reason: 'Password is too long.' };
+  if (COMMON_PASSWORDS.has(pw.toLowerCase())) return { ok: false, reason: 'That password is too common — pick something less guessable.' };
+  if (/^(.)\1+$/.test(pw)) return { ok: false, reason: 'Password can\'t be a single repeated character.' };
+  return { ok: true };
+}

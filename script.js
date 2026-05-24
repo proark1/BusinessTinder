@@ -1728,6 +1728,30 @@ qs("deleteAccountBtn").addEventListener("click", async () => {
   } catch (e) { alert(e.message); }
 });
 
+qs("exportDataBtn")?.addEventListener("click", async () => {
+  const btn = qs("exportDataBtn");
+  btn.disabled = true; btn.textContent = "Preparing…";
+  try {
+    // Needs the auth header, so fetch as a blob and trigger a download.
+    const res = await fetch(`${API_BASE}/me/export`, { headers: { Authorization: `Bearer ${state.token}` } });
+    if (!res.ok) throw new Error(`Export failed (${res.status})`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "businesstinder-export.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast("Export downloaded");
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "Export";
+  }
+});
+
 qs("manageBlocksBtn").addEventListener("click", async () => {
   const wrap = qs("blockedListWrap");
   if (!wrap.hidden) { wrap.hidden = true; return; }

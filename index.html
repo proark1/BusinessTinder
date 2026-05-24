@@ -80,7 +80,7 @@
             <label class="field">
               <span class="field-label">New password</span>
               <span class="pwd-wrap">
-                <input required type="password" name="password" minlength="6" autocomplete="new-password" placeholder="At least 6 characters" />
+                <input required type="password" name="password" minlength="8" autocomplete="new-password" placeholder="At least 8 characters" />
                 <button type="button" class="pwd-toggle" aria-label="Show password">👁</button>
               </span>
             </label>
@@ -100,7 +100,7 @@
             <label class="field">
               <span class="field-label">Create a password</span>
               <span class="pwd-wrap">
-                <input required type="password" name="password" minlength="6" autocomplete="new-password" placeholder="At least 6 characters" />
+                <input required type="password" name="password" minlength="8" autocomplete="new-password" placeholder="At least 8 characters" />
                 <button type="button" class="pwd-toggle" aria-label="Show password">👁</button>
               </span>
             </label>
@@ -494,6 +494,13 @@
           </div>
           <div id="blockedListWrap" hidden style="margin-top:8px;">
             <ul id="blockedList" class="list"></ul>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">Download my data</div>
+              <div class="settings-sub">Export your profile, swipes, matches &amp; messages as JSON</div>
+            </div>
+            <button id="exportDataBtn" class="ghost" type="button">Export</button>
           </div>
           <div class="settings-row">
             <div>

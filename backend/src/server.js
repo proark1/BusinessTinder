@@ -19,7 +19,8 @@ import { geocode, distanceKm, normalizeLocation } from './geocode.js';
 import { uploadDataUrl, HAS_CLOUD_UPLOAD } from './upload.js';
 import { isDisposableEmail } from './disposable.js';
 import { FAKE_USERS, FAKE_PASSWORD } from './fakes.js';
-import { todayKey, slugify, randomCode, effectivePlanTier, escapeHtml, isBanned } from './helpers.js';
+import { todayKey, slugify, randomCode, effectivePlanTier, escapeHtml, isBanned, validatePassword } from './helpers.js';
+import { loginLockState, recordLoginFailure, clearLoginFailures } from './loginGuard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.resolve(__dirname, '..', '..');
@@ -461,7 +462,8 @@ app.post('/auth/register', limits.authStrict, async (req, res) => {
   if (!email || !password || !fullName) return res.status(400).json({ error: 'Missing fields' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email))) return res.status(400).json({ error: 'Invalid email address' });
   if (isDisposableEmail(email)) return res.status(400).json({ error: 'Please use a real work or personal email — disposable domains are not allowed.' });
-  if (String(password).length < 6) return res.status(400).json({ error: 'Password too short (min 6)' });
+  const pw = validatePassword(password);
+  if (!pw.ok) return res.status(400).json({ error: pw.reason });
   const existing = await findUserByEmail(email);
   if (existing) return res.status(409).json({ error: 'Email already registered' });
   const passwordHash = await bcrypt.hash(password, 10);
@@ -490,14 +492,24 @@ app.post('/auth/register', limits.authStrict, async (req, res) => {
   res.json({ token: sign(user), user: publicUser(user), verifyUrl });
 });
 
+const LOCKOUT_MSG = 'Too many failed login attempts. Please wait a few minutes and try again.';
 app.post('/auth/login', limits.authStrict, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
+  const lock = loginLockState(email);
+  if (lock.locked) return res.status(429).json({ error: LOCKOUT_MSG, retryAfterMs: lock.retryAfterMs });
   const user = await findUserByEmail(email);
-  if (!user || !user.passwordHash) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!user || !user.passwordHash) {
+    const r = recordLoginFailure(email);
+    return res.status(r.locked ? 429 : 401).json(r.locked ? { error: LOCKOUT_MSG, retryAfterMs: r.retryAfterMs } : { error: 'Invalid credentials' });
+  }
   const ok = await bcrypt.compare(password, user.passwordHash);
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!ok) {
+    const r = recordLoginFailure(email);
+    return res.status(r.locked ? 429 : 401).json(r.locked ? { error: LOCKOUT_MSG, retryAfterMs: r.retryAfterMs } : { error: 'Invalid credentials' });
+  }
   if (isBanned(user)) return res.status(403).json({ error: banMessage(user) });
+  clearLoginFailures(email);
   res.json({ token: sign(user), user: publicUser(user) });
 });
 
@@ -604,7 +616,8 @@ app.post('/auth/resend-verify', auth, limits.authStrict, async (req, res) => {
 app.post('/auth/reset', limits.authStrict, async (req, res) => {
   const { token, password } = req.body || {};
   if (!token || !password) return res.status(400).json({ error: 'token and password required' });
-  if (String(password).length < 6) return res.status(400).json({ error: 'Password too short (min 6)' });
+  const pwReset = validatePassword(password);
+  if (!pwReset.ok) return res.status(400).json({ error: pwReset.reason });
   let user;
   if (prisma) user = await prisma.user.findUnique({ where: { resetToken: token } });
   else user = mem.users.find((u) => u.resetToken === token);
@@ -641,6 +654,56 @@ app.get('/me', auth, async (req, res) => {
     }
   }
   res.json({ user: publicUser(updated), profile: profile || null });
+});
+
+// GDPR-style data export: everything we hold for the signed-in user, as a
+// downloadable JSON file. Read-only; secrets (hashes/tokens) are never included.
+app.get('/me/export', auth, async (req, res) => {
+  const me = req.user.userId;
+  const user = await findUserById(me);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const profile = await findProfileByUserId(me);
+
+  let swipes, matches, saved, blocks, reports, messages, conversations;
+  if (prisma) {
+    [swipes, matches, saved, blocks, reports] = await Promise.all([
+      prisma.swipe.findMany({ where: { fromUserId: me }, orderBy: { createdAt: 'desc' } }),
+      prisma.match.findMany({ where: { OR: [{ userAId: me }, { userBId: me }] }, orderBy: { createdAt: 'desc' } }),
+      prisma.savedProfile.findMany({ where: { userId: me } }),
+      prisma.block.findMany({ where: { blockerId: me } }),
+      prisma.report.findMany({ where: { reporterId: me } }),
+    ]);
+    conversations = await prisma.conversation.findMany({ where: { matchId: { in: matches.map((m) => m.id) } } });
+    const convIds = conversations.map((c) => c.id);
+    messages = convIds.length
+      ? await prisma.message.findMany({ where: { conversationId: { in: convIds } }, orderBy: { createdAt: 'asc' } })
+      : [];
+  } else {
+    swipes = mem.swipes.filter((s) => s.fromUserId === me);
+    matches = mem.matches.filter((m) => m.userAId === me || m.userBId === me);
+    const matchIds = new Set(matches.map((m) => m.id));
+    conversations = mem.conversations.filter((c) => matchIds.has(c.matchId));
+    const convIds = new Set(conversations.map((c) => c.id));
+    messages = mem.messages.filter((m) => convIds.has(m.conversationId));
+    saved = mem.saved.filter((s) => s.userId === me);
+    blocks = mem.blocks.filter((b) => b.blockerId === me);
+    reports = mem.reports.filter((r) => r.reporterId === me);
+  }
+
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="businesstinder-export.json"');
+  res.send(JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    account: publicUser(user),
+    profile: profile || null,
+    swipes,
+    matches,
+    conversations,
+    messages,
+    saved,
+    blocks,
+    reports,
+  }, null, 2));
 });
 
 app.get('/prompts', (_req, res) => res.json({ prompts: PROMPTS }));

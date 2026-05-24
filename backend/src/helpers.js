@@ -67,6 +67,25 @@ export function isBanned(user) {
   return new Date(user.bannedUntil).getTime() > Date.now();
 }
 
+// Free/personal email providers — rejected for company verification so the
+// "company-verified" badge actually signals a work domain.
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'hotmail.com', 'outlook.com',
+  'live.com', 'msn.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me',
+  'protonmail.com', 'gmx.com', 'mail.com', 'zoho.com', 'yandex.com', 'pm.me',
+]);
+
+// Lowercased domain part of an email, or null if it doesn't look like an email.
+export function emailDomain(email) {
+  const m = /^[^\s@]+@([^\s@]+\.[^\s@]+)$/.exec(String(email || '').trim().toLowerCase());
+  return m ? m[1] : null;
+}
+
+export function isFreeEmailDomain(email) {
+  const d = emailDomain(email);
+  return !!d && FREE_EMAIL_DOMAINS.has(d);
+}
+
 export const MIN_PASSWORD_LENGTH = 8;
 // A small set of obviously-weak passwords we reject outright. Not a full
 // breach list — just the long tail of "password123" style choices.

@@ -35,6 +35,10 @@ model User {
   bannedAt              DateTime?
   bannedUntil           DateTime?
   banReason             String?
+  companyEmail          String?
+  companyDomain         String?
+  companyVerifiedAt     DateTime?
+  companyVerifyToken    String?   @unique
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   profile               Profile?

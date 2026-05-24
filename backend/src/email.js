@@ -53,6 +53,19 @@ export async function sendVerifyEmail(to, name, verifyUrl) {
   });
 }
 
+export async function sendCompanyVerifyEmail(to, name, verifyUrl) {
+  const url = appUrl(verifyUrl);
+  return sendEmail({
+    to,
+    subject: 'Verify your work email on BusinessTinder',
+    text: `Hi ${name || ''},\n\nConfirm this is your work email to earn a company-verified badge:\n${url}\n\nIf you didn't request this, you can ignore it.\n\n— BusinessTinder`,
+    html: `<p>Hi ${esc(name)},</p>
+      <p>Confirm this is your work email to earn a <strong>company-verified</strong> badge on your profile.</p>
+      <p><a href="${esc(url)}" style="display:inline-block;padding:12px 20px;background:#1e40af;color:#fff;text-decoration:none;border-radius:10px;">Verify my work email</a></p>
+      <p style="color:#666;font-size:13px;">If you didn't request this, you can ignore this email.</p>`,
+  });
+}
+
 export async function sendResetEmail(to, name, resetUrl) {
   const url = appUrl(resetUrl);
   return sendEmail({

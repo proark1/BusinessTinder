@@ -1060,10 +1060,33 @@ qs("loginForm").addEventListener("submit", async (e) => {
   const fd = new FormData(e.target);
   try {
     const data = await api("/auth/login", { method: "POST", body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }) });
-    const me = await fetchMeWithToken(data.token);
-    await onAuthSuccess(data.token, me.user, me.profile);
+    let token = data.token;
+    if (data.mfaRequired) {
+      token = await complete2faLogin(data.mfaToken);
+      if (!token) return; // cancelled or exhausted attempts
+    }
+    const me = await fetchMeWithToken(token);
+    await onAuthSuccess(token, me.user, me.profile);
   } catch (err) { showAuthError("loginError", err.message); }
 });
+
+// Second step of a 2FA login: collect a code and exchange the mfaToken for a
+// real session token. Minimal prompt-based UX for now.
+async function complete2faLogin(mfaToken) {
+  for (let i = 0; i < 3; i += 1) {
+    const code = prompt("Two-factor code (6 digits, or a recovery code):");
+    if (!code) return null;
+    try {
+      const r = await api("/auth/2fa", { method: "POST", body: JSON.stringify({ mfaToken, code: code.trim() }) });
+      if (r.recoveryCodeUsed) showToast("Signed in with a recovery code");
+      return r.token;
+    } catch (e) {
+      showAuthError("loginError", e.message);
+      if (e.status === 401 && /expired/i.test(e.message)) return null; // mfaToken died
+    }
+  }
+  return null;
+}
 qs("registerForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   showAuthError("registerError", "");
@@ -1223,6 +1246,7 @@ function updateChrome() {
   qs("settingsEmail").textContent = state.user?.email || "—";
   renderEmailNotifBtn();
   renderCompanyVerifyRow();
+  renderTwoFactorRow();
   if (state.profile?.slug) {
     const link = `${API_BASE}/u/${state.profile.slug}`;
     qs("publicProfileLink").href = link;
@@ -2086,6 +2110,45 @@ qs("companyVerifyBtn")?.addEventListener("click", async () => {
       if (confirm("Dev mode: open the verification link now?")) { location.href = r.verifyUrl; return; }
     }
     showToast("Verification email sent to your work address");
+  } catch (e) { showToast(e.message); }
+});
+
+function renderTwoFactorRow() {
+  const btn = qs("twoFactorBtn");
+  const status = qs("twoFactorStatus");
+  if (!btn || !status) return;
+  if (state.user?.twoFactorEnabled) {
+    status.textContent = "Enabled ✓ — a code is required at sign-in";
+    btn.textContent = "Disable";
+    btn.classList.toggle("danger", true);
+  } else {
+    status.textContent = "Add a TOTP authenticator for extra security";
+    btn.textContent = "Enable";
+    btn.classList.toggle("danger", false);
+  }
+}
+qs("twoFactorBtn")?.addEventListener("click", async () => {
+  if (state.user?.twoFactorEnabled) {
+    const code = prompt("Enter a current 2FA or recovery code to disable two-factor auth:");
+    if (!code) return;
+    try {
+      await api("/me/2fa/disable", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
+      if (state.user) state.user.twoFactorEnabled = false;
+      renderTwoFactorRow();
+      showToast("Two-factor auth disabled");
+    } catch (e) { showToast(e.message); }
+    return;
+  }
+  try {
+    const setup = await api("/me/2fa/setup", { method: "POST" });
+    alert(`Add this secret to your authenticator app (Google Authenticator, 1Password, etc.):\n\n${setup.secret}\n\nOr use this otpauth URL:\n${setup.otpauthUrl}`);
+    const code = prompt("Enter the 6-digit code from your authenticator to finish enabling 2FA:");
+    if (!code) return;
+    const r = await api("/me/2fa/enable", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
+    if (state.user) state.user.twoFactorEnabled = true;
+    renderTwoFactorRow();
+    alert(`Two-factor auth is on. Save these one-time recovery codes somewhere safe — each works once if you lose your device:\n\n${(r.recoveryCodes || []).join("\n")}`);
+    showToast("Two-factor auth enabled");
   } catch (e) { showToast(e.message); }
 });
 window.addEventListener("beforeinstallprompt", (e) => {

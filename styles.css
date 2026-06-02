@@ -483,6 +483,12 @@ p, li {
 .modal-card ul:not(.icebreaker-list) { margin: 8px 0; padding-left: 18px; color: var(--text-2); }
 .modal-card ul:not(.icebreaker-list) li { margin: 4px 0; }
 
+/* Generic prompt/alert/confirm dialog */
+.modal-actions { display: flex; gap: 8px; margin-top: 12px; }
+.modal-actions button { margin-top: 0; }
+#promptModalInput { width: 100%; padding: 12px 14px; border-radius: var(--radius-lg, 12px); border: 1px solid var(--border, rgba(0,0,0,0.15)); background: var(--surface-2, rgba(0,0,0,0.04)); color: inherit; font-size: 16px; margin-top: 8px; }
+.prompt-pre { white-space: pre-wrap; word-break: break-word; background: var(--surface-2, rgba(0,0,0,0.04)); border-radius: var(--radius-lg, 12px); padding: 12px 14px; margin: 8px 0 0; font-size: 13px; line-height: 1.5; max-height: 40vh; overflow: auto; user-select: all; }
+
 .icebreaker-list { list-style: none; padding: 0; display: grid; gap: 8px; margin: 8px 0; }
 .icebreaker-list li {
   background: var(--bg-chip); padding: 11px 13px; border-radius: 14px;

@@ -8,11 +8,23 @@ const HARD_BLOCK = [
 
 const SOFT_FLAGS = ['urgent', 'lottery', 'inheritance', 'prince', 'bitcoin doubling'];
 
-// Fold case + accents and collapse whitespace so trivial obfuscation ("ur gent",
-// accented chars) is harder, and match on word boundaries so substrings don't
-// false-positive ("Sussex"/"Middlesex" → "sex", "denude" → "nude").
+// Common Cyrillic/Greek homoglyphs that look like Latin letters, so a payload
+// like "frее mоney" (Cyrillic е/о) can't smuggle a blocked term past us.
+const CONFUSABLES = {
+  а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', к: 'k', м: 'm', т: 't', н: 'h', в: 'b', і: 'i', ѕ: 's', ј: 'j', ԁ: 'd', ո: 'n',
+  α: 'a', ε: 'e', ο: 'o', ρ: 'p', ϲ: 'c', ι: 'i', κ: 'k', μ: 'm', ν: 'v', τ: 't', υ: 'u', χ: 'x', γ: 'y',
+};
+function foldConfusables(s) {
+  let out = '';
+  for (const ch of s) out += CONFUSABLES[ch] || ch;
+  return out;
+}
+// Fold case + accents + homoglyphs, strip zero-width chars, and collapse
+// whitespace so trivial obfuscation is harder; matching then uses word
+// boundaries so substrings don't false-positive ("Sussex" → "sex").
 function normalizeText(text) {
-  return text.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+  const base = text.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
+  return foldConfusables(base).replace(/[​-‍﻿]/g, '').replace(/\s+/g, ' ').trim();
 }
 function termToRegex(term) {
   const body = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+');

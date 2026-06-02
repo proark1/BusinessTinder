@@ -100,3 +100,8 @@ test('moderateText: word boundaries avoid substring false positives', () => {
   assert.equal(moderateText('Wire Transfer me now').ok, false);
   assert.equal(moderateText('Send me your gift card').ok, false);
 });
+
+test('moderateText: folds Cyrillic homoglyphs before matching', () => {
+  assert.equal(moderateText('frее mоney now').ok, false); // Cyrillic е/о
+  assert.equal(moderateText('sех chat').ok, false);       // Cyrillic е/х
+});

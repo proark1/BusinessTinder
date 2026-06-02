@@ -1,4 +1,4 @@
-const CACHE = 'biztinder-v11';
+const CACHE = 'biztinder-v12';
 const ASSETS = ['/', '/index.html', '/styles.css', '/script.js', '/manifest.webmanifest', '/icon.svg'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
@@ -11,17 +11,25 @@ self.addEventListener('activate', (e) => {
       .then(() => self.clients.claim()),
   );
 });
+// Only static assets are eligible for the cache. Everything else (all API
+// routes, including new ones we haven't enumerated, and the public profile
+// pages) goes straight to the network — an allowlist is safer than a bypass
+// list, which silently caches any endpoint someone forgets to add.
+const STATIC_EXT = /\.(css|js|svg|png|ico|webmanifest|woff2?|jpg|jpeg|gif|webp)$/i;
+function isCacheable(url) {
+  return (
+    url.pathname === '/' ||
+    url.pathname === '/index.html' ||
+    url.pathname === '/manifest.webmanifest' ||
+    STATIC_EXT.test(url.pathname)
+  );
+}
 self.addEventListener('fetch', (e) => {
+  if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
-  const bypass = [
-    '/auth', '/discover', '/me', '/matches', '/messages', '/conversations',
-    '/swipes', '/likes', '/saved', '/blocks', '/reports', '/push', '/plan',
-    '/referrals', '/icebreakers', '/search', '/health', '/u/', '/profiles',
-    '/prompts', '/profile-views', '/upload', '/admin', '/boost',
-  ];
-  if (bypass.some((p) => url.pathname === p || url.pathname.startsWith(p + '/'))) return;
-  // Always go to network for the HTML shell AND for the core JS/CSS so
-  // deploys roll out immediately. Cache stays as the offline fallback.
+  if (url.origin !== self.location.origin || !isCacheable(url)) return; // network-only
+  // Network-first for the HTML shell and core JS/CSS so deploys roll out
+  // immediately; cache is the offline fallback.
   if (
     e.request.mode === 'navigate' ||
     url.pathname === '/' ||
@@ -32,6 +40,8 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
     return;
   }
+  // Cache-first for the other static assets, refreshing the cache in the
+  // background, and falling back to the network on a miss.
   e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
 });
 self.addEventListener('push', (e) => {

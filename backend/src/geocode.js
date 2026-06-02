@@ -20,6 +20,8 @@ export async function geocode(location) {
     const url = `${NOMINATIM_URL}/search?q=${encodeURIComponent(location)}&format=json&limit=1&addressdetails=0`;
     const res = await fetch(url, {
       headers: { 'User-Agent': USER_AGENT, 'Accept-Language': 'en' },
+      // Don't let a slow/hanging geocoder stall the awaiting profile save.
+      signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {
       cache.set(key, null);

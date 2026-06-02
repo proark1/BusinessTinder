@@ -42,10 +42,10 @@ export function totp(secret, atMs = Date.now(), stepSec = 30) {
 }
 
 // Verify a 6-digit token, allowing ±`window` steps for clock skew.
-export function verifyTotp(secret, token, atMs = Date.now(), window = 1) {
+export function verifyTotp(secret, token, atMs = Date.now(), window = 1, stepSec = 30) {
   if (!secret || !/^\d{6}$/.test(String(token || ''))) return false;
   const secretBuf = base32Decode(secret);
-  const counter = Math.floor(atMs / 1000 / 30);
+  const counter = Math.floor(atMs / 1000 / stepSec);
   const provided = Buffer.from(String(token));
   for (let w = -window; w <= window; w += 1) {
     const candidate = Buffer.from(hotp(secretBuf, counter + w));

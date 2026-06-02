@@ -8,13 +8,26 @@ const HARD_BLOCK = [
 
 const SOFT_FLAGS = ['urgent', 'lottery', 'inheritance', 'prince', 'bitcoin doubling'];
 
+// Fold case + accents and collapse whitespace so trivial obfuscation ("ur gent",
+// accented chars) is harder, and match on word boundaries so substrings don't
+// false-positive ("Sussex"/"Middlesex" → "sex", "denude" → "nude").
+function normalizeText(text) {
+  return text.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+}
+function termToRegex(term) {
+  const body = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+');
+  return new RegExp(`\\b${body}\\b`, 'i');
+}
+const HARD_BLOCK_RE = HARD_BLOCK.map((t) => [t, termToRegex(t)]);
+const SOFT_FLAGS_RE = SOFT_FLAGS.map((t) => [t, termToRegex(t)]);
+
 export function moderateText(text) {
   if (!text || typeof text !== 'string') return { ok: true, action: 'allow' };
-  const t = text.toLowerCase();
-  for (const term of HARD_BLOCK) {
-    if (t.includes(term)) return { ok: false, action: 'block', reason: `blocked term: ${term}` };
+  const t = normalizeText(text);
+  for (const [term, re] of HARD_BLOCK_RE) {
+    if (re.test(t)) return { ok: false, action: 'block', reason: `blocked term: ${term}` };
   }
-  const flags = SOFT_FLAGS.filter((term) => t.includes(term));
+  const flags = SOFT_FLAGS_RE.filter(([, re]) => re.test(t)).map(([term]) => term);
   if (flags.length) return { ok: true, action: 'flag', flags };
   return { ok: true, action: 'allow' };
 }

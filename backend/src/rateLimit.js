@@ -1,5 +1,9 @@
-// Tiny in-memory token-bucket rate limiter. Per-key sliding window.
-// Good enough for a single-node deployment; swap for Redis when scaling out.
+// Per-key fixed-window rate limiter. Uses a shared Redis counter when REDIS_URL
+// is configured (so limits hold across instances), and otherwise falls back to
+// an in-memory bucket — which is correct for single-node and is also the
+// fallback when Redis is briefly unreachable.
+
+import { rateIncr } from './cluster.js';
 
 const buckets = new Map(); // key -> { count, resetAt }
 
@@ -15,33 +19,42 @@ function _check(key, limit, windowMs) {
   return { ok: true, remaining: limit - b.count, resetIn: b.resetAt - now };
 }
 
-export function rateLimit({ key, limit, windowMs }) {
-  return (req, res, next) => {
-    if (process.env.NODE_ENV === 'test') return next();
-    const id = `${key}:${(typeof key === 'function' ? key(req) : req.ip)}`;
-    const result = _check(id, limit, windowMs);
+// Prefer the shared Redis window; fall back to the in-memory bucket when it's
+// unavailable (returns null).
+async function check(key, limit, windowMs) {
+  const shared = await rateIncr(key, windowMs);
+  if (shared) {
+    return { ok: shared.count <= limit, remaining: limit - shared.count, resetIn: shared.resetIn };
+  }
+  return _check(key, limit, windowMs);
+}
+
+function enforce(limit) {
+  return (res, result, next) => {
     res.setHeader('X-RateLimit-Limit', String(limit));
     res.setHeader('X-RateLimit-Remaining', String(Math.max(0, result.remaining)));
     if (!result.ok) {
       res.setHeader('Retry-After', String(Math.ceil(result.resetIn / 1000)));
       return res.status(429).json({ error: 'Too many requests. Slow down.' });
     }
-    next();
+    return next();
+  };
+}
+
+export function rateLimit({ key, limit, windowMs }) {
+  const apply = enforce(limit);
+  return async (req, res, next) => {
+    if (process.env.NODE_ENV === 'test') return next();
+    const id = `${key}:${(typeof key === 'function' ? key(req) : req.ip)}`;
+    return apply(res, await check(id, limit, windowMs), next);
   };
 }
 
 export function rateLimitBy(getKey, limit, windowMs) {
-  return (req, res, next) => {
+  const apply = enforce(limit);
+  return async (req, res, next) => {
     if (process.env.NODE_ENV === 'test') return next();
-    const id = `kf:${getKey(req)}`;
-    const result = _check(id, limit, windowMs);
-    res.setHeader('X-RateLimit-Limit', String(limit));
-    res.setHeader('X-RateLimit-Remaining', String(Math.max(0, result.remaining)));
-    if (!result.ok) {
-      res.setHeader('Retry-After', String(Math.ceil(result.resetIn / 1000)));
-      return res.status(429).json({ error: 'Too many requests. Slow down.' });
-    }
-    next();
+    return apply(res, await check(`kf:${getKey(req)}`, limit, windowMs), next);
   };
 }
 

@@ -1,35 +1,960 @@
 openapi: 3.0.3
 info:
   title: BusinessTinder API
-  version: 0.1.0
+  version: 1.0.0
+  description: >
+    HTTP + WebSocket API for BusinessTinder — a mobile-first professional
+    matching platform. The runtime backend lives in `backend/src/server.js`
+    (Express + `ws`), backed by Prisma/Postgres with an in-memory fallback for
+    local development, and it also serves the static frontend at `/`.
+
+
+    Authentication is a Bearer JWT (7-day expiry) returned by the auth
+    endpoints. When a user has TOTP two-factor enabled, `/auth/login` returns a
+    short-lived `mfaToken` that must be exchanged at `/auth/2fa` for the full
+    session token.
+
+
+    Rate limits are applied per IP on sensitive routes and return `429` with a
+    `Retry-After` header. All error responses share the shape
+    `{ "error": string, "requestId"?: string }`. Every response carries an
+    `X-Request-Id` header for log correlation.
 servers:
-  - url: http://localhost:8787
+  - url: http://localhost:4000
+    description: Local dev / single-origin (frontend served from the same host)
+tags:
+  - name: Health & Ops
+  - name: Auth
+  - name: Profile
+  - name: Discovery & Search
+  - name: Swipes & Likes
+  - name: Matches & Messages
+  - name: Saved
+  - name: Trust & Safety
+  - name: Admin
+  - name: Account
+  - name: Two-Factor
+  - name: Company Verification
+  - name: Billing & Boost
+  - name: Referrals
+  - name: Misc & Legal
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        requestId: { type: string }
+    PublicUser:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        avatarUrl: { type: string, nullable: true }
+        planTier: { type: string, enum: [FREE, PRO] }
+        planExpiresAt: { type: string, format: date-time, nullable: true }
+        referralCode: { type: string, nullable: true }
+        emailVerified: { type: boolean }
+        verified: { type: boolean }
+        emailOptOut: { type: boolean }
+        companyVerified: { type: boolean }
+        companyDomain: { type: string, nullable: true }
+        twoFactorEnabled: { type: boolean }
+        isAdmin: { type: boolean }
+    Profile:
+      type: object
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        slug: { type: string }
+        headline: { type: string }
+        userType: { type: string }
+        lookingFor: { type: array, items: { type: string } }
+        bio: { type: string }
+        stage: { type: string }
+        industries: { type: array, items: { type: string } }
+        skills: { type: array, items: { type: string } }
+        location: { type: string }
+        latitude: { type: number, nullable: true }
+        longitude: { type: number, nullable: true }
+        remoteOk: { type: boolean }
+        commitment: { type: string, nullable: true }
+        linkedinUrl: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true }
+        photoUrl: { type: string, nullable: true }
+        photos: { type: array, items: { type: string } }
+        pastCompanies: { type: array, items: { type: string } }
+        hoursPerWeek: { type: integer, nullable: true }
+        calLink: { type: string, nullable: true }
+        pitchDeckUrl: { type: string, nullable: true }
+        promptIds: { type: array, items: { type: string } }
+        promptAnswers: { type: array, items: { type: string } }
+        lastActiveAt: { type: string, format: date-time }
+    AuthResult:
+      type: object
+      properties:
+        token: { type: string, description: Bearer JWT (7-day expiry) }
+        user: { $ref: '#/components/schemas/PublicUser' }
+    Message:
+      type: object
+      properties:
+        id: { type: string }
+        conversationId: { type: string }
+        senderId: { type: string }
+        body: { type: string }
+        kind: { type: string, enum: [text, image] }
+        status: { type: string, enum: [SENT, DELIVERED, READ] }
+        createdAt: { type: string, format: date-time }
+
+security:
+  - bearerAuth: []
+
 paths:
+  # ---------------- Health & Ops ----------------
   /health:
     get:
+      tags: [Health & Ops]
+      security: []
+      summary: Liveness + DB round-trip
       responses:
-        '200': { description: OK }
-  /auth/signup:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  mode: { type: string, enum: [postgres, memory] }
+                  googleLogin: { type: boolean }
+                  pushEnabled: { type: boolean }
+  /ops/readiness:
+    get:
+      tags: [Health & Ops]
+      security: []
+      summary: Detailed readiness checklist (db, JWT secret, Google, email, upload, push, error reporting, multi-node)
+      responses:
+        '200':
+          description: Readiness report. `ok` reflects only the required checks.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  mode: { type: string }
+                  timestamp: { type: string, format: date-time }
+                  summary: { type: object }
+                  checks: { type: array, items: { type: object } }
+
+  # ---------------- Auth ----------------
+  /auth/config:
+    get:
+      tags: [Auth]
+      security: []
+      summary: Public frontend config (Google client id, VAPID key, free-tier limits)
+      responses:
+        '200':
+          description: Config
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  googleClientId: { type: string, nullable: true }
+                  vapidPublicKey: { type: string, nullable: true }
+                  freeDailySwipes: { type: integer }
+                  freeDailyLikeReveals: { type: integer }
+                  hasCloudUpload: { type: boolean }
+  /auth/register:
     post:
+      tags: [Auth]
+      security: []
+      summary: Email/password registration (rate limited 8/min)
       requestBody:
         required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, fullName]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, description: Must pass the password policy }
+                fullName: { type: string }
+                referredBy: { type: string, description: Optional referral code }
       responses:
-        '201': { description: Created }
+        '201':
+          description: Created. `verifyUrl` is only returned when email delivery is not configured.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/AuthResult'
+                  - type: object
+                    properties:
+                      verifyUrl: { type: string }
+        '400': { description: Missing/invalid fields, disposable email, or weak password, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: Email already registered }
   /auth/login:
     post:
+      tags: [Auth]
+      security: []
+      summary: Email/password login (rate limited 8/min, lockout after repeated failures)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
       responses:
-        '200': { description: Authenticated }
+        '200':
+          description: Authenticated, or a 2FA challenge when TOTP is enabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AuthResult'
+                  - type: object
+                    properties:
+                      mfaRequired: { type: boolean }
+                      mfaToken: { type: string, description: Short-lived (5 min) token for /auth/2fa }
+        '401': { description: Invalid credentials }
+        '403': { description: Account banned/suspended }
+        '429': { description: Too many attempts — temporary lockout }
+  /auth/2fa:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Exchange an mfaToken + TOTP/recovery code for a session token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mfaToken, code]
+              properties:
+                mfaToken: { type: string }
+                code: { type: string, description: 6-digit TOTP or a one-time recovery code }
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/AuthResult'
+                  - type: object
+                    properties:
+                      recoveryCodeUsed: { type: boolean }
+        '400': { description: 2FA not enabled }
+        '401': { description: Invalid/expired token or wrong code }
+  /auth/google:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Google Sign-In (verifies the ID token server-side)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [credential]
+              properties:
+                credential: { type: string, description: Google ID token }
+                referredBy: { type: string }
+      responses:
+        '200': { description: Authenticated, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '401': { description: Invalid or unverified credential }
+        '503': { description: Google Sign-In not configured }
+  /auth/verify:
+    get:
+      tags: [Auth]
+      security: []
+      summary: Confirm email address from the link in the verification email
+      parameters:
+        - { name: token, in: query, required: true, schema: { type: string } }
+      responses:
+        '302': { description: "Redirect to /?verified=1" }
+        '404': { description: Invalid/expired token }
+  /auth/resend-verify:
+    post:
+      tags: [Auth]
+      summary: Re-send the verification email (auth required)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  alreadyVerified: { type: boolean }
+                  verifyUrl: { type: string }
+        '404': { description: User not found }
+  /auth/forgot:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Begin password reset (always 200 so it never leaks account existence)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: OK. `resetUrl` is only returned when email delivery is not configured.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  resetUrl: { type: string }
+  /auth/reset:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Complete password reset using the emailed token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string }
+      responses:
+        '200': { description: Reset; a fresh session token is returned }
+        '400': { description: Expired token or weak password }
+        '404': { description: Invalid token }
+
+  # ---------------- Profile ----------------
+  /me:
+    get:
+      tags: [Account]
+      summary: Current user + profile (also acts as activity heartbeat)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/PublicUser' }
+                  profile: { $ref: '#/components/schemas/Profile', nullable: true }
+        '404': { description: User not found }
+    delete:
+      tags: [Account]
+      summary: Permanently delete the account and all related data
+      responses:
+        '200': { description: Deleted }
+  /prompts:
+    get:
+      tags: [Profile]
+      security: []
+      summary: Catalog of profile/icebreaker prompts
+      responses:
+        '200': { description: OK }
   /profiles:
-    get: { responses: { '200': { description: Profiles } } }
-    post: { responses: { '201': { description: Created } } }
+    post:
+      tags: [Profile]
+      summary: Create or fully replace the signed-in user's profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Profile' }
+      responses:
+        '200': { description: Saved profile, content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }
+        '400': { description: Validation error }
+    patch:
+      tags: [Profile]
+      summary: Partial profile edit (no onboarding re-prompt)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Profile' }
+      responses:
+        '200': { description: Updated profile }
+        '400': { description: Validation error }
+        '404': { description: Profile not found }
+  /profiles/me:
+    get:
+      tags: [Profile]
+      summary: The signed-in user's profile (or null)
+      responses:
+        '200': { description: Profile or null }
+  /upload:
+    post:
+      tags: [Profile]
+      summary: Upload an image (Cloudinary when configured, otherwise inline base64)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dataUrl]
+              properties:
+                dataUrl: { type: string, description: base64 data URL }
+                folder: { type: string, enum: [chat, profile] }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+                  storage: { type: string, enum: [cloud, inline] }
+        '400': { description: Missing/invalid dataUrl }
+
+  # ---------------- Discovery & Search ----------------
+  /discover:
+    get:
+      tags: [Discovery & Search]
+      summary: Ranked candidate deck (scored, filtered, diversified, boost/super-like aware)
+      parameters:
+        - { name: maxKm, in: query, schema: { type: integer }, description: Distance cap (1–20000) }
+        - { name: stage, in: query, schema: { type: string } }
+        - { name: lookingFor, in: query, schema: { type: string } }
+        - { name: location, in: query, schema: { type: string } }
+        - { name: industry, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Array of profiles enriched with matchScore, matchReasons, superLikedYou, boosted, distanceKm
+  /search:
+    get:
+      tags: [Discovery & Search]
+      summary: Keyword search across profiles (capped at SEARCH_LIMIT)
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Array of matching profiles }
+
+  # ---------------- Swipes & Likes ----------------
   /swipes:
-    post: { responses: { '201': { description: Swipe created } } }
+    post:
+      tags: [Swipes & Likes]
+      summary: Record a swipe; creates a match + conversation on a mutual right/super-like
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toUserId, direction]
+              properties:
+                toUserId: { type: string }
+                direction: { type: string, enum: [LEFT, RIGHT, SUPER_LIKE] }
+      responses:
+        '200':
+          description: Swipe recorded; `matched` indicates a new match.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matched: { type: boolean }
+                  match: { type: object }
+                  conversation: { type: object }
+                  icebreakers: { type: array, items: { type: string } }
+                  theirIcebreakers: { type: array, items: { type: string } }
+        '400': { description: Invalid direction }
+        '403': { description: Blocked or banned }
+        '429': { description: Daily free-swipe limit reached (FREE plan) }
+  /likes/incoming:
+    get:
+      tags: [Swipes & Likes]
+      summary: Who liked you (PRO sees all; FREE sees masked silhouettes + daily reveals)
+      responses:
+        '200': { description: Locked (FREE) or unlocked (PRO) liker list }
+  /likes/reveal:
+    post:
+      tags: [Swipes & Likes]
+      summary: Reveal one unseen liker (FREE plan daily allowance)
+      responses:
+        '200': { description: Revealed profile }
+        '400': { description: Already PRO }
+        '404': { description: No new likers }
+        '429': { description: Out of daily reveals }
+
+  # ---------------- Matches & Messages ----------------
   /matches:
-    get: { responses: { '200': { description: Matches } } }
-  /messages:
-    get: { responses: { '200': { description: Messages } } }
-    post: { responses: { '201': { description: Message created } } }
-  /reports:
-    post: { responses: { '201': { description: Report created } } }
+    get:
+      tags: [Matches & Messages]
+      summary: List matches with conversation, last message, and unread count
+      responses:
+        '200': { description: Array of matches }
+  /matches/{matchId}:
+    delete:
+      tags: [Matches & Messages]
+      summary: Unmatch (removes match, conversation, and messages)
+      parameters:
+        - { name: matchId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Unmatched }
+        '403': { description: Not your match }
+        '404': { description: Not found }
+  /conversations/{conversationId}/read:
+    post:
+      tags: [Matches & Messages]
+      summary: Mark all messages in a conversation as read
+      parameters:
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+        '403': { description: Forbidden conversation }
+  /messages/{conversationId}:
+    get:
+      tags: [Matches & Messages]
+      summary: Paginated message history
+      parameters:
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: before, in: query, schema: { type: string }, description: Cursor messageId }
+      responses:
+        '200': { description: Array of messages, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Message' } } } } }
+        '403': { description: Forbidden conversation }
+    post:
+      tags: [Matches & Messages]
+      summary: Send a message over HTTP (also available via the WebSocket)
+      parameters:
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+                kind: { type: string, enum: [text, image] }
+      responses:
+        '200': { description: Created message, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: Empty body or moderation block }
+        '403': { description: Forbidden / banned / blocked }
+
+  # ---------------- Saved ----------------
+  /saved:
+    get:
+      tags: [Saved]
+      summary: List saved/bookmarked profiles
+      responses:
+        '200': { description: Array of saved profiles }
+  /saved/{userId}:
+    post:
+      tags: [Saved]
+      summary: Save a profile
+      parameters: [{ name: userId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK } }
+    delete:
+      tags: [Saved]
+      summary: Unsave a profile
+      parameters: [{ name: userId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK } }
+  /swipes/history:
+    get:
+      tags: [Swipes & Likes]
+      summary: The last 100 swipes by the current user
+      responses:
+        '200': { description: Array of swipe records }
+
+  # ---------------- Profile views ----------------
+  /profile-views/{userId}:
+    post:
+      tags: [Profile]
+      summary: Record that the current user viewed a profile
+      parameters: [{ name: userId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK } }
+  /profile-views/incoming:
+    get:
+      tags: [Profile]
+      summary: Who viewed your profile (FREE sees count only; PRO sees the list)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 25 } }
+      responses:
+        '200': { description: Locked (FREE) or unlocked (PRO) viewer data }
+
+  # ---------------- Trust & Safety ----------------
   /blocks:
-    post: { responses: { '201': { description: Block created } } }
+    get:
+      tags: [Trust & Safety]
+      summary: List users you've blocked
+      responses: { '200': { description: Array of blocks } }
+    post:
+      tags: [Trust & Safety]
+      summary: Block a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetId]
+              properties: { targetId: { type: string } }
+      responses:
+        '200': { description: OK }
+        '400': { description: targetId required }
+  /blocks/{targetId}:
+    delete:
+      tags: [Trust & Safety]
+      summary: Unblock a user
+      parameters: [{ name: targetId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK } }
+  /reports:
+    post:
+      tags: [Trust & Safety]
+      summary: Report a user (also auto-blocks them)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetId]
+              properties:
+                targetId: { type: string }
+                reason: { type: string }
+      responses:
+        '200': { description: OK }
+        '400': { description: targetId required }
+
+  # ---------------- Admin ----------------
+  /admin/verify:
+    post:
+      tags: [Admin]
+      summary: Toggle a user's verified badge (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId: { type: string }
+                verified: { type: boolean }
+      responses:
+        '200': { description: OK }
+        '403': { description: Not an admin }
+  /admin/ban:
+    post:
+      tags: [Admin]
+      summary: Ban or timed-suspend a user; closes related reports (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId: { type: string }
+                days: { type: integer, description: Omit/0 for a permanent ban }
+                reason: { type: string }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, bannedUntil: { type: string, nullable: true } } } } } }
+        '400': { description: Missing userId / self-ban }
+        '403': { description: Not an admin }
+        '404': { description: User not found }
+  /admin/unban:
+    post:
+      tags: [Admin]
+      summary: Lift all bans/suspensions (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties: { userId: { type: string } }
+      responses:
+        '200': { description: OK }
+        '403': { description: Not an admin }
+  /admin/reports/{id}/resolve:
+    post:
+      tags: [Admin]
+      summary: Resolve an abuse report (admin only)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [OPEN, DISMISSED, ACTIONED], default: DISMISSED }
+      responses:
+        '200': { description: OK }
+        '403': { description: Not an admin }
+        '404': { description: Report not found }
+  /admin/seed-fakes:
+    post:
+      tags: [Admin]
+      summary: Seed demo profiles for testing (idempotent, admin only)
+      responses:
+        '200': { description: Seed summary with shared demo credentials }
+        '403': { description: Not an admin }
+  /admin/queue:
+    get:
+      tags: [Admin]
+      summary: Moderation dashboard — pending reports + recent users (admin only)
+      responses:
+        '200': { description: OK }
+        '403': { description: Not an admin }
+
+  # ---------------- Account & notifications ----------------
+  /me/export:
+    get:
+      tags: [Account]
+      summary: GDPR data export (downloadable JSON; never includes secrets)
+      responses:
+        '200': { description: JSON file attachment }
+        '404': { description: User not found }
+  /me/notifications:
+    post:
+      tags: [Account]
+      summary: Toggle activity-email opt-out (match / message digests)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emailOptOut]
+              properties: { emailOptOut: { type: boolean } }
+      responses: { '200': { description: OK } }
+  /push/subscribe:
+    post:
+      tags: [Account]
+      summary: Register a Web Push subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint, keys]
+              properties:
+                endpoint: { type: string }
+                keys:
+                  type: object
+                  properties:
+                    p256dh: { type: string }
+                    auth: { type: string }
+      responses:
+        '200': { description: OK }
+        '400': { description: Invalid subscription }
+
+  # ---------------- Two-Factor ----------------
+  /me/2fa/setup:
+    post:
+      tags: [Two-Factor]
+      summary: Begin TOTP enrollment — returns secret + otpauth URI
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string }
+                  otpauthUrl: { type: string }
+        '400': { description: Already enabled }
+  /me/2fa/enable:
+    post:
+      tags: [Two-Factor]
+      summary: Confirm TOTP enrollment with a code — returns one-time recovery codes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties: { code: { type: string } }
+      responses:
+        '200':
+          description: Enabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  recoveryCodes: { type: array, items: { type: string } }
+        '400': { description: Not set up or wrong code }
+  /me/2fa/disable:
+    post:
+      tags: [Two-Factor]
+      summary: Disable TOTP (requires a current code or recovery code)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties: { code: { type: string } }
+      responses:
+        '200': { description: Disabled }
+        '400': { description: Not enabled or wrong code }
+
+  # ---------------- Company verification ----------------
+  /me/company-email:
+    post:
+      tags: [Company Verification]
+      summary: Start work-email verification (sends a confirmation link)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: { email: { type: string, format: email } }
+      responses:
+        '200': { description: OK; verifyUrl returned only when email delivery is off }
+        '400': { description: Invalid, free, or disposable domain }
+  /company/verify:
+    get:
+      tags: [Company Verification]
+      security: []
+      summary: Confirm a work email from the emailed link
+      parameters: [{ name: token, in: query, required: true, schema: { type: string } }]
+      responses:
+        '302': { description: "Redirect to /?companyVerified=1" }
+        '404': { description: Invalid/expired token }
+
+  # ---------------- Billing & Boost ----------------
+  /plan/upgrade:
+    post:
+      tags: [Billing & Boost]
+      summary: Upgrade to PRO (payment integration pending)
+      description: Returns 501 in production unless ALLOW_DEV_PLAN_UPGRADE=true. When enabled, grants a finite 30-day PRO window.
+      responses:
+        '200': { description: Upgraded }
+        '501': { description: Not available — real payments not wired up }
+  /boost:
+    post:
+      tags: [Billing & Boost]
+      summary: Activate a 30-minute top-of-deck boost (PRO, max 1/day)
+      responses:
+        '200': { description: Boost activated }
+        '402': { description: PRO required }
+        '404': { description: User not found }
+        '429': { description: Already boosted today }
+  /boost/status:
+    get:
+      tags: [Billing & Boost]
+      summary: Current boost status
+      responses: { '200': { description: OK } }
+
+  # ---------------- Referrals ----------------
+  /referrals/redeem:
+    post:
+      tags: [Referrals]
+      summary: Redeem a referral code (both sides get a 30-day PRO bonus)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties: { code: { type: string } }
+      responses:
+        '200': { description: Redeemed }
+        '400': { description: Own code }
+        '404': { description: Invalid code }
+
+  # ---------------- Misc & Legal ----------------
+  /icebreakers:
+    get:
+      tags: [Misc & Legal]
+      summary: Suggested conversation starters for a target profile
+      parameters: [{ name: userId, in: query, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK }
+        '400': { description: Missing userId }
+  /legal/terms:
+    get:
+      tags: [Misc & Legal]
+      security: []
+      summary: Terms of service (HTML)
+      responses: { '200': { description: HTML } }
+  /legal/privacy:
+    get:
+      tags: [Misc & Legal]
+      security: []
+      summary: Privacy policy (HTML)
+      responses: { '200': { description: HTML } }
+  /unsubscribe:
+    get:
+      tags: [Misc & Legal]
+      security: []
+      summary: One-click email unsubscribe (HMAC-token verified, no auth)
+      parameters:
+        - { name: u, in: query, required: true, schema: { type: string }, description: userId }
+        - { name: t, in: query, required: true, schema: { type: string }, description: HMAC token }
+      responses:
+        '200': { description: HTML confirmation }
+        '400': { description: Invalid token }
+  /u/{slug}:
+    get:
+      tags: [Misc & Legal]
+      security: []
+      summary: Public, server-rendered, shareable profile page (HTML + JSON-LD)
+      parameters: [{ name: slug, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: HTML page }
+        '404': { description: Profile not found }
+
+# ---------------------------------------------------------------------------
+# WebSocket — not expressible in OpenAPI 3.0, documented here for completeness.
+#
+# Endpoint: GET ws(s)://<host>/ws
+# Auth:     send `{ "type": "auth", "token": "<JWT>" }` within 5s of connecting
+#           (a `?token=` query param is also accepted for backwards compat).
+#           Server replies `{ "type": "auth_ok" }`; bad/missing auth closes 1008.
+# Client → server messages:
+#   { "type": "send_message", "conversationId", "toUserId", "body", "kind"? }
+#   { "type": "typing",       "conversationId", "toUserId" }
+#   { "type": "read_message", "messageId" }
+# Server → client messages:
+#   { "type": "message",     "message": <Message> }
+#   { "type": "message_ack", "messageId", "status": "DELIVERED" }
+#   { "type": "typing",      "conversationId", "fromUserId" }
+#   { "type": "read_ack",    "messageId" }
+#   { "type": "error",       "error": <string> }
+# Offline recipients fall back to web push + a throttled email digest.
+# Set REDIS_URL to fan delivery out across multiple server instances.
+# ---------------------------------------------------------------------------

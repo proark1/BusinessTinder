@@ -1,5 +1,20 @@
 # Business Tinder — Product & Build Plan (Mobile Web First)
 
+> **Implementation status (current).** This is the original product/vision plan.
+> The shipped app is **live and well beyond the MVP scope below** — auth (incl.
+> Google + TOTP 2FA), onboarding, scored discovery + search, swipes/matches,
+> realtime chat, likes/profile-views, trust & safety (block/report/moderation +
+> admin ban/queue), FREE/PRO gating, boosts, referrals, compliance pages,
+> company-email verification, observability, and optional Redis fan-out.
+>
+> The **stack diverged from the recommendation in §5**: rather than
+> Next.js + Tailwind on Vercel, the frontend is a static vanilla-JS PWA SPA and
+> the backend is **Express + `ws` + Prisma/Postgres** (`backend/src/server.js`),
+> serving the frontend from a single origin. See [`README.md`](README.md),
+> [`backend/README.md`](backend/README.md), and
+> [`backend/openapi.yaml`](backend/openapi.yaml) for what's actually built.
+> The sections below are preserved as the original planning record.
+
 ## 1) Product Vision
 Build the best mobile-first business matching platform where founders, operators, investors, freelancers, and domain experts discover each other through fast, high-signal swiping and high-quality profile context.
 

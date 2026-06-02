@@ -74,6 +74,10 @@ async function api(path, opts = {}) {
     const err = new Error(baseMsg);
     err.status = res.status;
     err.body = body;
+    // A 401 on an authenticated call means the session expired/was revoked
+    // server-side — drop to the auth screen instead of leaving a broken shell.
+    // (Skip /auth/* so a bad login/2FA attempt doesn't trigger a "logout".)
+    if (res.status === 401 && state.token && !path.startsWith("/auth/")) logout();
     throw err;
   }
   return body;
@@ -753,6 +757,10 @@ async function onSwipe(direction, profile) {
       statusText.textContent = `${verb} ${profile.fullName}.`;
     }
   } catch (e) {
+    // The swipe didn't land — undo the optimistic advance so the card comes
+    // back instead of being silently skipped.
+    state.swipeHistory.pop();
+    if (inPool) state.index -= 1;
     if (e.status === 429) {
       openModal(qs("proModal"));
       statusText.textContent = "You've used your free swipes for today. Pro is unlimited.";
@@ -979,7 +987,7 @@ function renderPhotoGallery() {
   state.pendingPhotos.forEach((src, i) => {
     const wrap = document.createElement("div");
     wrap.style.position = "relative";
-    wrap.innerHTML = `<img src="${src}" alt="" /><button type="button" style="position:absolute;top:-4px;right:-4px;width:20px;height:20px;border-radius:50%;background:#000;color:#fff;border:0;">✕</button>`;
+    wrap.innerHTML = `<img src="${esc(src)}" alt="" /><button type="button" style="position:absolute;top:-4px;right:-4px;width:20px;height:20px;border-radius:50%;background:#000;color:#fff;border:0;">✕</button>`;
     wrap.querySelector("button").onclick = () => { state.pendingPhotos.splice(i, 1); renderPhotoGallery(); };
     g.appendChild(wrap);
   });
@@ -1171,7 +1179,7 @@ qs("forgotForm").addEventListener("submit", async (e) => {
     const r = await api("/auth/forgot", { method: "POST", body: JSON.stringify({ email: fd.get("email") }) });
     const hint = qs("forgotHint");
     if (r.resetUrl) {
-      hint.innerHTML = `Dev mode: <a href="${r.resetUrl}">${r.resetUrl}</a>`;
+      hint.innerHTML = `Dev mode: <a href="${esc(r.resetUrl)}">${esc(r.resetUrl)}</a>`;
     } else {
       hint.textContent = "If that email exists, a reset link is on the way.";
     }
@@ -1333,7 +1341,7 @@ function renderPromptsEditor() {
     row.className = "prompt-row";
     const select = document.createElement("select");
     select.innerHTML = `<option value="">Pick a prompt…</option>` + state.prompts.map((p) =>
-      `<option value="${p.id}" ${p.id === entry.id ? "selected" : ""}>${p.label}</option>`
+      `<option value="${esc(p.id)}" ${p.id === entry.id ? "selected" : ""}>${esc(p.label)}</option>`
     ).join("");
     select.addEventListener("change", (e) => {
       state.pendingPrompts[i].id = e.target.value;
@@ -1422,8 +1430,11 @@ function connectWebSocket() {
         }
       } catch {}
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (!state.token) return; // logged out
+      // 1008 = server policy violation (our token was rejected/expired). Don't
+      // reconnect-loop forever against a token that will never authenticate.
+      if (ev?.code === 1008) { logout(); return; }
       state.wsReconnectAttempts += 1;
       const delay = Math.min(30_000, 1000 * 2 ** Math.min(state.wsReconnectAttempts, 5));
       setTimeout(connectWebSocket, delay);
@@ -1506,7 +1517,7 @@ async function openChat(matchId) {
     const box2 = qs("icebreakerBox");
     if (messages.length === 0 && ice.prompts?.length) {
       box2.hidden = false;
-      box2.innerHTML = `<p class="hint">Icebreakers</p>` + ice.prompts.map((p) => `<button type="button">${p}</button>`).join("");
+      box2.innerHTML = `<p class="hint">Icebreakers</p>` + ice.prompts.map((p) => `<button type="button">${esc(p)}</button>`).join("");
       box2.querySelectorAll("button").forEach((b) =>
         b.addEventListener("click", () => { qs("chatInput").value = b.textContent; qs("chatInput").focus(); box2.hidden = true; }),
       );

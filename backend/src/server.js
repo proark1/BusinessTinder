@@ -105,6 +105,11 @@ const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:noreply@businesstinder.app';
 const FREE_DAILY_SWIPES = Number(process.env.FREE_DAILY_SWIPES || 30);
 const FREE_DAILY_LIKE_REVEALS = Number(process.env.FREE_DAILY_LIKE_REVEALS || 1);
+// Max number of signups a single inviter earns referral rewards for (anti-farming).
+const REFERRAL_REWARD_CAP = Number(process.env.REFERRAL_REWARD_CAP || 25);
+// A throwaway bcrypt hash compared against when an email is unknown, so login
+// timing doesn't reveal whether an account exists.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('bt-timing-equalizer', 10);
 // Cap the discover pool so we never fetch/score/serialize the entire profile
 // table in one request. Most-recently-active candidates win the slots.
 const DISCOVER_LIMIT = Number(process.env.DISCOVER_LIMIT || 200);
@@ -290,7 +295,12 @@ function banMessage(user) {
 function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET);
+    // Step-up tokens (e.g. the pre-2FA `mfaToken`) are signed with the same
+    // secret but carry a `purpose`. They must NOT be accepted as a full
+    // session token, or 2FA could be bypassed by skipping /auth/2fa.
+    if (payload.purpose) return res.status(401).json({ error: 'Unauthorized' });
+    req.user = payload;
     next();
   } catch {
     res.status(401).json({ error: 'Unauthorized' });
@@ -465,23 +475,37 @@ app.get('/auth/config', (_req, res) => {
 
 async function applyReferralPayout(newUser, code) {
   if (!code) return newUser;
+  // A new account can only be attributed to a referrer once.
+  if (newUser.referredBy) return newUser;
   let inviter;
   if (prisma) inviter = await prisma.user.findUnique({ where: { referralCode: code } });
   else inviter = mem.users.find((u) => u.referralCode === code);
   if (!inviter || inviter.id === newUser.id) return newUser;
-  // Extend (don't shorten) any existing PRO window for the inviter.
-  const inviterCurrent = inviter.planExpiresAt ? new Date(inviter.planExpiresAt).getTime() : 0;
-  const inviterReward = new Date(Math.max(inviterCurrent, Date.now()) + 30 * 86400_000);
+
+  // Anti-farming: an inviter only earns referral rewards for their first
+  // REFERRAL_REWARD_CAP signups. Beyond that we still welcome the new user with
+  // their bonus, but stop extending the inviter's PRO so a single account can't
+  // mint unlimited PRO by registering throwaway referrals.
+  let referredCount;
+  if (prisma) referredCount = await prisma.user.count({ where: { referredBy: inviter.id } });
+  else referredCount = mem.users.filter((u) => u.referredBy === inviter.id).length;
+  const rewardInviter = referredCount < REFERRAL_REWARD_CAP;
+
+  // Extend (don't shorten) any existing PRO window.
   const newCurrent = newUser.planExpiresAt ? new Date(newUser.planExpiresAt).getTime() : 0;
   const newReward = new Date(Math.max(newCurrent, Date.now()) + 30 * 86400_000);
+  if (rewardInviter) {
+    const inviterCurrent = inviter.planExpiresAt ? new Date(inviter.planExpiresAt).getTime() : 0;
+    const inviterReward = new Date(Math.max(inviterCurrent, Date.now()) + 30 * 86400_000);
+    if (prisma) await prisma.user.update({ where: { id: inviter.id }, data: { planTier: 'PRO', planExpiresAt: inviterReward } });
+    else { inviter.planTier = 'PRO'; inviter.planExpiresAt = inviterReward.toISOString(); }
+  }
   if (prisma) {
-    await prisma.user.update({ where: { id: inviter.id }, data: { planTier: 'PRO', planExpiresAt: inviterReward } });
     return prisma.user.update({
       where: { id: newUser.id },
       data: { planTier: 'PRO', planExpiresAt: newReward, referredBy: inviter.id },
     });
   }
-  inviter.planTier = 'PRO'; inviter.planExpiresAt = inviterReward.toISOString();
   newUser.planTier = 'PRO'; newUser.planExpiresAt = newReward.toISOString();
   newUser.referredBy = inviter.id;
   return newUser;
@@ -530,6 +554,7 @@ app.post('/auth/login', limits.authStrict, async (req, res) => {
   if (lock.locked) return res.status(429).json({ error: LOCKOUT_MSG, retryAfterMs: lock.retryAfterMs });
   const user = await findUserByEmail(email);
   if (!user || !user.passwordHash) {
+    await bcrypt.compare(String(password), DUMMY_PASSWORD_HASH); // equalize timing vs. the real path
     const r = recordLoginFailure(email);
     return res.status(r.locked ? 429 : 401).json(r.locked ? { error: LOCKOUT_MSG, retryAfterMs: r.retryAfterMs } : { error: 'Invalid credentials' });
   }
@@ -795,6 +820,14 @@ function sanitizeProfile(body) {
       // declared type (rejecting SVG, mislabeled, or non-image payloads).
       const mod = moderateImage(p);
       if (!mod.ok) return { error: `Photo rejected: ${mod.reason}` };
+    }
+  }
+  // photoUrl/avatarUrl can be set directly (not just derived from photos[]), so
+  // run them through the same image gate to keep non-image/unsafe URLs out.
+  for (const field of ['photoUrl', 'avatarUrl']) {
+    if (typeof out[field] === 'string' && out[field]) {
+      const mod = moderateImage(out[field]);
+      if (!mod.ok) return { error: `${field} rejected: ${mod.reason}` };
     }
   }
   if (Array.isArray(out.photos) && out.photos.length && !out.photoUrl) out.photoUrl = out.photos[0];
@@ -1180,21 +1213,36 @@ app.post('/swipes', auth, limits.swipe, async (req, res) => {
   const { toUserId, direction } = req.body || {};
   const fromUserId = req.user.userId;
   if (!['LEFT', 'RIGHT', 'SUPER_LIKE'].includes(direction)) return res.status(400).json({ error: 'Invalid direction' });
+  if (!toUserId) return res.status(400).json({ error: 'toUserId required' });
+  if (toUserId === fromUserId) return res.status(400).json({ error: 'You cannot swipe on yourself' });
   if (await isBlocked(fromUserId, toUserId)) return res.status(403).json({ error: 'Blocked' });
+
+  // Reject swipes against non-existent users (also avoids an FK 500 on insert).
+  const target = await findUserById(toUserId);
+  if (!target) return res.status(404).json({ error: 'User not found' });
 
   // Daily quota for FREE plan.
   const user = await findUserById(fromUserId);
   if (isBanned(user)) return res.status(403).json({ error: banMessage(user) });
   if (effectivePlanTier(user) !== 'PRO') {
     const today = todayKey();
-    const day = user.lastSwipeDay || null;
-    const count = day === today ? user.swipesToday || 0 : 0;
-    if (count >= FREE_DAILY_SWIPES) {
-      return res.status(429).json({ error: 'Daily free swipe limit reached. Upgrade to Pro.', limit: FREE_DAILY_SWIPES });
-    }
     if (prisma) {
-      await prisma.user.update({ where: { id: fromUserId }, data: { swipesToday: count + 1, lastSwipeDay: today } });
+      // Atomic: roll the counter over on a new day, then increment only while
+      // under the cap. The conditional WHERE makes the limit race-safe so a
+      // burst of parallel swipes can't slip past FREE_DAILY_SWIPES.
+      await prisma.user.updateMany({ where: { id: fromUserId, NOT: { lastSwipeDay: today } }, data: { swipesToday: 0, lastSwipeDay: today } });
+      const bumped = await prisma.user.updateMany({
+        where: { id: fromUserId, swipesToday: { lt: FREE_DAILY_SWIPES } },
+        data: { swipesToday: { increment: 1 } },
+      });
+      if (bumped.count === 0) {
+        return res.status(429).json({ error: 'Daily free swipe limit reached. Upgrade to Pro.', limit: FREE_DAILY_SWIPES });
+      }
     } else {
+      const count = user.lastSwipeDay === today ? user.swipesToday || 0 : 0;
+      if (count >= FREE_DAILY_SWIPES) {
+        return res.status(429).json({ error: 'Daily free swipe limit reached. Upgrade to Pro.', limit: FREE_DAILY_SWIPES });
+      }
       user.swipesToday = count + 1;
       user.lastSwipeDay = today;
     }
@@ -1863,6 +1911,8 @@ app.post('/blocks', auth, async (req, res) => {
   const meId = req.user.userId;
   const target = req.body?.targetId;
   if (!target) return res.status(400).json({ error: 'targetId required' });
+  if (target === meId) return res.status(400).json({ error: 'You cannot block yourself' });
+  if (!(await findUserById(target))) return res.status(404).json({ error: 'User not found' });
   if (prisma) {
     await prisma.block.upsert({
       where: { blockerId_targetId: { blockerId: meId, targetId: target } },
@@ -1878,6 +1928,8 @@ app.post('/reports', auth, async (req, res) => {
   const meId = req.user.userId;
   const { targetId, reason } = req.body || {};
   if (!targetId) return res.status(400).json({ error: 'targetId required' });
+  if (targetId === meId) return res.status(400).json({ error: 'You cannot report yourself' });
+  if (!(await findUserById(targetId))) return res.status(404).json({ error: 'User not found' });
   if (prisma) {
     await prisma.report.create({ data: { reporterId: meId, targetId, reason: reason || null } });
     await prisma.block.upsert({
@@ -2110,17 +2162,18 @@ app.post('/referrals/redeem', auth, async (req, res) => {
   else inviter = mem.users.find((u) => u.referralCode === code);
   if (!inviter) return res.status(404).json({ error: 'Invalid code' });
   if (inviter.id === req.user.userId) return res.status(400).json({ error: 'Cannot redeem your own code' });
+  const me = await findUserById(req.user.userId);
+  // Idempotent: a referral can only ever be attributed once per account.
+  if (me?.referredBy) return res.status(400).json({ error: 'You have already redeemed a referral code' });
   if (prisma) await prisma.user.update({ where: { id: req.user.userId }, data: { referredBy: inviter.id } });
-  else {
-    const me = mem.users.find((u) => u.id === req.user.userId);
-    if (me) me.referredBy = inviter.id;
-  }
+  else if (me) me.referredBy = inviter.id;
   res.json({ ok: true, inviter: { fullName: inviter.fullName } });
 });
 
 app.get('/icebreakers', auth, async (req, res) => {
   const userId = req.query.userId;
   if (!userId) return res.status(400).json({ error: 'userId required' });
+  if (await isBlocked(req.user.userId, userId)) return res.status(403).json({ error: 'Forbidden' });
   const them = await findProfileByUserId(userId);
   res.json({ prompts: suggestIcebreakers(them) });
 });
@@ -2388,7 +2441,10 @@ wss.on('connection', (ws, req) => {
   const urlToken = new URL(req.url, 'http://localhost').searchParams.get('token');
   let payload = null;
   if (urlToken) {
-    try { payload = jwt.verify(urlToken, JWT_SECRET); } catch { /* fall through to handshake */ }
+    try {
+      const p = jwt.verify(urlToken, JWT_SECRET);
+      if (!p.purpose) payload = p; // reject step-up (mfa) tokens
+    } catch { /* fall through to handshake */ }
   }
   if (payload) { addWsClient(payload.userId, ws); presenceAdd(payload.userId); }
 
@@ -2403,7 +2459,9 @@ wss.on('connection', (ws, req) => {
 
       if (!payload && data.type === 'auth') {
         try {
-          payload = jwt.verify(data.token, JWT_SECRET);
+          const p = jwt.verify(data.token, JWT_SECRET);
+          if (p.purpose) { ws.close(1008, 'invalid-token'); return; } // reject step-up tokens
+          payload = p;
           clearTimeout(handshakeTimer);
           addWsClient(payload.userId, ws);
           presenceAdd(payload.userId);
@@ -2418,7 +2476,7 @@ wss.on('connection', (ws, req) => {
       const userId = payload.userId;
 
       if (data.type === 'send_message') {
-        const { conversationId, toUserId, body, kind } = data;
+        const { conversationId, body, kind } = data;
         if (!body) return ws.send(JSON.stringify({ type: 'error', error: 'Empty message' }));
         const safeKind = ['text', 'image'].includes(kind) ? kind : 'text';
         if (safeKind === 'image') {
@@ -2437,6 +2495,12 @@ wss.on('connection', (ws, req) => {
           return ws.send(JSON.stringify({ type: 'error', error: 'Account suspended' }));
         }
         if (!(await canAccessConversation(userId, conversationId))) {
+          return ws.send(JSON.stringify({ type: 'error', error: 'Forbidden conversation' }));
+        }
+        // Never trust a client-supplied recipient: derive the other party from
+        // the conversation so a sender can't deliver/notify an arbitrary user.
+        const toUserId = await otherUserInConversation(userId, conversationId);
+        if (!toUserId) {
           return ws.send(JSON.stringify({ type: 'error', error: 'Forbidden conversation' }));
         }
         if (await isBlocked(userId, toUserId)) {

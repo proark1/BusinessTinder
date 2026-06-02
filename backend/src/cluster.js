@@ -78,3 +78,24 @@ export async function isOnlineAnywhere(userId) {
   if (!enabled || !pub) return false;
   try { return (await pub.scard(`bt:presence:${userId}`)) > 0; } catch { return false; }
 }
+
+// Shared fixed-window rate-limit counter so limits hold across instances when
+// REDIS_URL is set. Returns the running count for this window (and the ms until
+// it resets), or null when clustering is off / Redis errors — callers then fall
+// back to the per-process limiter.
+export async function rateIncr(key, windowMs) {
+  if (!enabled || !pub) return null;
+  try {
+    const k = `bt:rl:${key}`;
+    const count = await pub.incr(k);
+    if (count === 1) {
+      await pub.pexpire(k, windowMs);
+      return { count, resetIn: windowMs };
+    }
+    let ttl = await pub.pttl(k);
+    if (ttl < 0) { await pub.pexpire(k, windowMs); ttl = windowMs; } // missing TTL — re-arm
+    return { count, resetIn: ttl };
+  } catch {
+    return null;
+  }
+}

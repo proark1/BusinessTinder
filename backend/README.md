@@ -34,7 +34,8 @@ The full HTTP + WebSocket contract is documented in [`openapi.yaml`](openapi.yam
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional | Web-push notifications. |
 | `APP_URL` | optional | Base URL used when building links in emails. |
 | `ADMIN_EMAILS` | optional | Comma-separated emails granted `/admin/*` access (read live; no restart needed). |
-| `REDIS_URL` | optional | Enables multi-node WebSocket fan-out + cross-instance presence. |
+| `REDIS_URL` | optional | Enables multi-node WebSocket fan-out + cross-instance presence, and a shared cross-instance rate-limit counter (falls back to per-process in-memory when unset/unreachable). |
+| `REFERRAL_REWARD_CAP` | optional | Max signups a single inviter earns referral rewards for (default 25; anti-farming). |
 | `ERROR_WEBHOOK_URL` / `SERVICE_NAME` | optional | Pluggable error reporting + log tagging. |
 | `LOG_REQUESTS` | optional | Toggle structured per-request logging. |
 | `FREE_DAILY_SWIPES` / `FREE_DAILY_LIKE_REVEALS` | optional | Free-tier limits (default 30 / 1). |

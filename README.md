@@ -67,13 +67,14 @@ Recommended for full functionality:
 
 Scale & observability (optional):
 
-- `REDIS_URL` — enables multi-node WebSocket fan-out + cross-instance presence
+- `REDIS_URL` — enables multi-node WebSocket fan-out + cross-instance presence, and a shared cross-instance rate-limit counter (falls back to per-process in-memory when unset/unreachable)
 - `ERROR_WEBHOOK_URL`, `SERVICE_NAME` — pluggable error reporting and log tagging
 - `LOG_REQUESTS` — toggle structured per-request logging
 
 Tunable limits (optional, with sensible defaults):
 
 - `FREE_DAILY_SWIPES` (30), `FREE_DAILY_LIKE_REVEALS` (1)
+- `REFERRAL_REWARD_CAP` (25) — max signups a single inviter earns referral rewards for (anti-farming)
 - `DISCOVER_LIMIT` (200), `SEARCH_LIMIT` (50)
 - `LOGIN_MAX_FAILS`, `LOGIN_FAIL_WINDOW_MS`, `LOGIN_LOCK_MS` — login lockout tuning
 - `DISPOSABLE_EMAIL_DOMAINS` — extra disposable domains to reject

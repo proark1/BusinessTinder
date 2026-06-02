@@ -141,6 +141,54 @@ function releaseFocus(modal) {
 }
 function openModal(modal) { modal.hidden = false; trapFocus(modal); }
 function closeModal(modal) { modal.hidden = true; releaseFocus(modal); }
+
+// Promise-based, non-blocking replacements for window.prompt/alert/confirm so
+// the UI stays styled, focus-trapped, and accessible. Resolves to the trimmed
+// input (uiPrompt), or true/null (uiConfirm/uiAlert), and to null on
+// cancel/Escape/backdrop.
+function uiDialog({ title = "", message = "", input = false, placeholder = "", value = "", pre = "", okText = "OK", cancelText = "Cancel" } = {}) {
+  return new Promise((resolve) => {
+    const modal = qs("promptModal");
+    qs("promptModalTitle").textContent = title;
+    const msgEl = qs("promptModalMsg"); msgEl.textContent = message; msgEl.hidden = !message;
+    const inp = qs("promptModalInput"); inp.hidden = !input; inp.value = value || ""; inp.placeholder = placeholder || "";
+    const preEl = qs("promptModalPre"); preEl.hidden = !pre; preEl.textContent = pre || "";
+    const ok = qs("promptModalOk"); const cancel = qs("promptModalCancel");
+    ok.textContent = okText; cancel.hidden = !cancelText; cancel.textContent = cancelText || "Cancel";
+    let done = false;
+    const finish = (val) => {
+      if (done) return; done = true;
+      ok.removeEventListener("click", onOk);
+      cancel.removeEventListener("click", onCancel);
+      inp.removeEventListener("keydown", onKey);
+      modal.removeEventListener("keydown", onEsc);
+      modal.removeEventListener("click", onBackdrop);
+      closeModal(modal);
+      resolve(val);
+    };
+    const onOk = () => finish(input ? inp.value.trim() : true);
+    const onCancel = () => finish(null);
+    const onKey = (e) => { if (e.key === "Enter") { e.preventDefault(); onOk(); } };
+    const onEsc = (e) => { if (e.key === "Escape") onCancel(); };
+    const onBackdrop = (e) => { if (e.target === modal) onCancel(); };
+    ok.addEventListener("click", onOk);
+    cancel.addEventListener("click", onCancel);
+    inp.addEventListener("keydown", onKey);
+    modal.addEventListener("keydown", onEsc);
+    modal.addEventListener("click", onBackdrop);
+    openModal(modal);
+    if (input) setTimeout(() => inp.focus(), 30);
+  });
+}
+function uiPrompt(message, { placeholder = "", value = "" } = {}) {
+  return uiDialog({ title: message, input: true, placeholder, value });
+}
+function uiAlert(message, { pre = "" } = {}) {
+  return uiDialog({ title: message, pre, cancelText: null });
+}
+function uiConfirm(message) {
+  return uiDialog({ title: message });
+}
 // Auto-wire close on backdrop click + Esc
 function wireModal(modal) {
   modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(modal); });
@@ -168,6 +216,15 @@ function avatarFor(p) {
     `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(p?.fullName || p?.headline || "BT")}`);
 }
 function preloadImage(url) { if (!url) return; const img = new Image(); img.src = url; }
+// Fill a list/grid <img>: source, a meaningful alt (the person's name, for
+// screen readers), and lazy/async decoding so long lists don't block paint.
+function fillAvatar(img, p, name) {
+  if (!img) return;
+  img.src = avatarFor(p);
+  img.alt = name || p?.fullName || "";
+  img.loading = "lazy";
+  img.decoding = "async";
+}
 function timeAgo(d) {
   if (!d) return "";
   const diff = (Date.now() - new Date(d).getTime()) / 1000;
@@ -279,7 +336,10 @@ function renderCard(p, index, total) {
   const node = template.content.firstElementChild.cloneNode(true);
   node.style.zIndex = `${10 + index}`;
   node.style.transform = `scale(${1 - index * 0.03}) translateY(${index * 8}px)`;
-  node.querySelector(".avatar").src = avatarFor(p);
+  const cardAvatar = node.querySelector(".avatar");
+  cardAvatar.src = avatarFor(p);
+  cardAvatar.alt = p.fullName || "Profile photo";
+  cardAvatar.decoding = "async";
   node.querySelector("h2").textContent = p.fullName || "Anonymous";
   node.querySelector(".role").textContent = p.headline || "";
   const distBit = typeof p.distanceKm === "number" ? ` · ${p.distanceKm} km away` : "";
@@ -396,7 +456,7 @@ function renderGrid(target, profiles) {
       <p class="role"></p>
       <p class="meta"></p>
       <p class="score"></p>`;
-    card.querySelector("img").src = avatarFor(p);
+    fillAvatar(card.querySelector("img"), p);
     card.querySelector("h3").textContent = p.fullName || "";
     card.querySelector(".role").textContent = p.headline || "";
     const km = typeof p.distanceKm === "number" ? ` · ${p.distanceKm} km` : "";
@@ -517,7 +577,7 @@ function renderSwipeHistory() {
         <div class="match-preview"></div>
       </div>
       <div class="match-side"><span class="history-pill ${h.direction}">${label}</span><small>${when}</small></div>`;
-    li.querySelector("img").src = h.avatarUrl || avatarFor(h);
+    fillAvatar(li.querySelector("img"), h, h.fullName);
     li.querySelector(".match-name").textContent = h.fullName || "Unknown";
     li.querySelector(".match-preview").textContent = h.headline || "";
     historyList.appendChild(li);
@@ -571,7 +631,7 @@ async function loadViewedYou() {
       const div = document.createElement("div");
       div.className = "liked-row";
       div.innerHTML = `<img alt="" /><div><strong></strong><br/><small style="color:var(--text-2)"></small></div>`;
-      div.querySelector("img").src = avatarFor(p);
+      fillAvatar(div.querySelector("img"), p);
       div.querySelector("strong").textContent = p.fullName || "";
       div.querySelector("small").textContent = p.headline || "";
       div.addEventListener("click", () => openDetail(p));
@@ -650,13 +710,23 @@ async function loadLikedYou() {
   } catch {}
 }
 
+let _matchesSig = "";
 function renderMatches() {
   qs("matchesCount").textContent = state.matches.length ? ` · ${state.matches.length}` : "";
+  // Skip the full teardown/rebuild when nothing user-visible changed — this
+  // runs on every inbound message, so a busy thread would otherwise thrash the
+  // whole list on each keystroke from the other side.
+  const sig = state.matches
+    .map((m) => `${m.id}:${m.unreadCount || 0}:${m.lastMessage?.id || ""}:${m.lastMessage?.body || ""}`)
+    .join("|");
+  if (sig === _matchesSig && matchesList.childElementCount) return;
+  _matchesSig = sig;
   matchesList.innerHTML = "";
   if (!state.matches.length) {
     matchesList.innerHTML = `<li class="empty"><div class="empty-icon">💼</div><p>No matches yet. Go swipe right on someone great.</p></li>`;
     return;
   }
+  const frag = document.createDocumentFragment();
   state.matches.forEach((m) => {
     const other = m.other; if (!other) return;
     const li = document.createElement("li");
@@ -669,10 +739,10 @@ function renderMatches() {
         <div class="match-preview"></div>
       </div>
       <div class="match-side"></div>`;
-    li.querySelector("img").src = avatarFor({
+    fillAvatar(li.querySelector("img"), {
       photos: other.profile?.photos, photoUrl: other.profile?.photoUrl,
       avatarUrl: other.avatarUrl, fullName: other.fullName,
-    });
+    }, other.fullName);
     li.querySelector(".match-name").textContent = other.fullName || "";
     appendLastActiveBadge(li.querySelector(".match-name"), other.profile?.lastActiveAt);
     const preview = m.lastMessage?.body
@@ -693,8 +763,9 @@ function renderMatches() {
       side.appendChild(ts);
     }
     li.addEventListener("click", () => openChat(m.id));
-    matchesList.appendChild(li);
+    frag.appendChild(li);
   });
+  matchesList.appendChild(frag);
 }
 
 function renderSaved() {
@@ -714,7 +785,7 @@ function renderSaved() {
         <div class="match-preview"></div>
       </div>
       <div class="match-side"><button class="ghost">Remove</button></div>`;
-    li.querySelector("img").src = avatarFor(p);
+    fillAvatar(li.querySelector("img"), p);
     li.querySelector(".match-name").textContent = p.fullName || "";
     li.querySelector(".match-preview").textContent = p.headline || "";
     const removeBtn = li.querySelector("button");
@@ -863,7 +934,8 @@ function enableLongPress(card, profile) {
         renderDeck();
       };
       menu.querySelector(".card-menu-report").onclick = async () => {
-        const reason = prompt("Why are you reporting?");
+        const reason = await uiPrompt("Why are you reporting?", { placeholder: "Optional reason" });
+        if (reason === null) { menu.hidden = true; return; }
         await api("/reports", { method: "POST", body: JSON.stringify({ targetId: profile.userId, reason }) });
         menu.hidden = true;
         state.pool = state.pool.filter((p) => p.userId !== profile.userId);
@@ -997,7 +1069,7 @@ function renderPhotoGallery() {
     add.innerHTML = "＋<input type='file' accept='image/png,image/jpeg,image/webp' style='display:none;' />";
     add.querySelector("input").addEventListener("change", async (e) => {
       const file = e.target.files?.[0]; if (!file) return;
-      if (file.size > 3 * 1024 * 1024) return alert("Photo too large (max 3MB).");
+      if (file.size > 3 * 1024 * 1024) return showToast("Photo too large (max 3MB).");
       const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
       add.classList.add("uploading");
       try {
@@ -1082,7 +1154,7 @@ qs("loginForm").addEventListener("submit", async (e) => {
 // real session token. Minimal prompt-based UX for now.
 async function complete2faLogin(mfaToken) {
   for (let i = 0; i < 3; i += 1) {
-    const code = prompt("Two-factor code (6 digits, or a recovery code):");
+    const code = await uiPrompt("Two-factor code (6 digits, or a recovery code):", { placeholder: "123456" });
     if (!code) return null;
     try {
       const r = await api("/auth/2fa", { method: "POST", body: JSON.stringify({ mfaToken, code: code.trim() }) });
@@ -1237,6 +1309,7 @@ async function onAuthSuccess(token, user, profile) {
 function logout() {
   state.token = null; state.user = null; state.profile = null;
   state.pool = []; state.matches = []; state.saved = [];
+  _matchesSig = "";
   localStorage.removeItem(TOKEN_KEY);
   state.ws?.close();
   setLoggedInChrome(false);
@@ -1428,6 +1501,9 @@ function connectWebSocket() {
           clearTimeout(window._typingTimer);
           window._typingTimer = setTimeout(() => (qs("typingIndicator").hidden = true), 1800);
         }
+        if (msg.type === "read" && state.activeMatch?.conversation?.id === msg.conversationId) {
+          markActiveChatRead(msg.at);
+        }
       } catch {}
     };
     ws.onclose = (ev) => {
@@ -1455,6 +1531,8 @@ function buildMessageNode(m) {
     const img = document.createElement("img");
     img.src = m.body;
     img.alt = "Shared photo";
+    img.loading = "lazy";
+    img.decoding = "async";
     img.className = "msg-image";
     img.addEventListener("click", () => window.open(m.body, "_blank"));
     div.appendChild(img);
@@ -1469,9 +1547,16 @@ function buildMessageNode(m) {
   }
   return div;
 }
+// Keep the in-memory chat cache (and the live DOM) bounded so a very long
+// conversation can't grow unbounded during a session.
+const MAX_CHAT_MESSAGES = 400;
 function appendMessage(m) {
   state.chatMessagesCache.push(m);
   const box = qs("messages");
+  if (state.chatMessagesCache.length > MAX_CHAT_MESSAGES) {
+    state.chatMessagesCache.shift();
+    if (!state.chatSearchQuery && box.firstChild) box.removeChild(box.firstChild);
+  }
   if (!messageMatchesSearch(m)) return;
   box.appendChild(buildMessageNode(m));
   box.scrollTop = box.scrollHeight;
@@ -1481,6 +1566,23 @@ function rerenderChatMessages() {
   box.innerHTML = "";
   state.chatMessagesCache.filter(messageMatchesSearch).forEach((m) => box.appendChild(buildMessageNode(m)));
   box.scrollTop = box.scrollHeight;
+}
+// Show a "Read · <time>" receipt under the latest message I sent.
+function showReadReceipt(at) {
+  const box = qs("messages");
+  box.querySelector(".read-receipt")?.remove();
+  const meNodes = box.querySelectorAll(".msg.me");
+  const node = meNodes[meNodes.length - 1];
+  if (!node) return;
+  const r = document.createElement("span");
+  r.className = "read-receipt";
+  r.textContent = `Read · ${timeAgo(at || new Date().toISOString())}`;
+  node.appendChild(r);
+}
+// The other party read the open conversation — update my receipts live.
+function markActiveChatRead(at) {
+  state.chatMessagesCache.forEach((m) => { if (m.senderId === state.user?.id) m.status = "READ"; });
+  showReadReceipt(at);
 }
 
 async function openChat(matchId) {
@@ -1502,15 +1604,7 @@ async function openChat(matchId) {
     // Read receipt: under the latest of my messages that the other side has READ.
     const mine = messages.filter((m) => m.senderId === state.user.id);
     const lastRead = mine.reverse().find((m) => m.status === "READ");
-    if (lastRead) {
-      const node = box.lastElementChild;
-      if (node?.classList.contains("me")) {
-        const r = document.createElement("span");
-        r.className = "read-receipt";
-        r.textContent = `Read · ${timeAgo(lastRead.createdAt)}`;
-        node.appendChild(r);
-      }
-    }
+    if (lastRead) showReadReceipt(lastRead.createdAt);
   } catch {}
   try {
     const ice = await api(`/icebreakers?userId=${match.other.id}`);
@@ -1546,7 +1640,7 @@ qs("chatForm").addEventListener("submit", async (e) => {
       const saved = await api(`/messages/${state.activeMatch.conversation.id}`, { method: "POST", body: JSON.stringify({ body: text }) });
       appendMessage(saved);
     }
-  } catch (e) { alert(e.message); }
+  } catch (e) { showToast(e.message); }
 });
 qs("chatInput").addEventListener("input", () => {
   if (state.ws?.readyState !== 1 || !state.activeMatch?.conversation) return;
@@ -1559,7 +1653,7 @@ qs("chatPhotoInput").addEventListener("change", async (e) => {
   const file = e.target.files?.[0];
   e.target.value = "";
   if (!file) return;
-  if (file.size > 4 * 1024 * 1024) return alert("Photo too large (max 4MB).");
+  if (file.size > 4 * 1024 * 1024) return showToast("Photo too large (max 4MB).");
   if (!state.activeMatch?.conversation) return;
   const dataUrl = await new Promise((res, rej) => {
     const r = new FileReader();
@@ -1579,7 +1673,7 @@ qs("chatPhotoInput").addEventListener("change", async (e) => {
       appendMessage(saved);
     }
   } catch (err) {
-    alert(`Couldn't send photo: ${err.message}`);
+    showToast(`Couldn't send photo: ${err.message}`);
   }
 });
 
@@ -1743,8 +1837,8 @@ function loadSettingsData() {
 qs("settingsBtn").addEventListener("click", () => { show("settings"); loadSettingsData(); });
 qs("logoutBtn").addEventListener("click", logout);
 qs("refreshReadinessBtn")?.addEventListener("click", loadReadiness);
-qs("topbarLogoutBtn").addEventListener("click", () => {
-  if (confirm("Log out?")) logout();
+qs("topbarLogoutBtn").addEventListener("click", async () => {
+  if (await uiConfirm("Log out?")) logout();
 });
 
 // Theme picker: auto / light / dark, persisted in localStorage and applied
@@ -1770,11 +1864,11 @@ document.querySelectorAll(".theme-picker button[data-theme-pick]").forEach((btn)
 applyTheme(currentTheme());
 
 qs("deleteAccountBtn").addEventListener("click", async () => {
-  if (!confirm("Permanently delete your account and all your data? This cannot be undone.")) return;
+  if (!(await uiConfirm("Permanently delete your account and all your data? This cannot be undone."))) return;
   try {
     await api("/me", { method: "DELETE" });
     logout();
-  } catch (e) { alert(e.message); }
+  } catch (e) { showToast(e.message); }
 });
 
 qs("exportDataBtn")?.addEventListener("click", async () => {
@@ -1795,7 +1889,7 @@ qs("exportDataBtn")?.addEventListener("click", async () => {
     URL.revokeObjectURL(url);
     showToast("Export downloaded");
   } catch (e) {
-    alert(e.message);
+    showToast(e.message);
   } finally {
     btn.disabled = false; btn.textContent = "Export";
   }
@@ -1833,12 +1927,12 @@ qs("manageBlocksBtn").addEventListener("click", async () => {
       );
     }
     wrap.hidden = false;
-  } catch (e) { alert(e.message); }
+  } catch (e) { showToast(e.message); }
 });
 qs("unmatchBtn").addEventListener("click", async () => {
   if (!state.activeMatch?.id) return;
   const name = state.activeMatch.other?.fullName || "this person";
-  if (!confirm(`Unmatch ${name}? This deletes the conversation.`)) return;
+  if (!(await uiConfirm(`Unmatch ${name}? This deletes the conversation.`))) return;
   try {
     await api(`/matches/${state.activeMatch.id}`, { method: "DELETE" });
     state.activeMatch = null;
@@ -1847,7 +1941,7 @@ qs("unmatchBtn").addEventListener("click", async () => {
     await loadMatches();
     show("matches");
   } catch (e) {
-    alert(e.message);
+    showToast(e.message);
   }
 });
 
@@ -1952,7 +2046,7 @@ async function openAdminModal() {
         body.insertBefore(out, seedRow.nextSibling);
         showToast(`${r.created} test users added`);
         if (r.created > 0) loadDiscover();
-      } catch (e) { alert(e.message); }
+      } catch (e) { showToast(e.message); }
       finally { btn.disabled = false; btn.textContent = "Seed 30"; }
     });
 
@@ -1978,7 +2072,7 @@ async function openAdminModal() {
           verifyBtn.textContent = u.verified ? "Unverify" : "Verify";
           renderSub();
           showToast(u.verified ? "Verified" : "Unverified");
-        } catch (e) { alert(e.message); }
+        } catch (e) { showToast(e.message); }
       });
       const banBtn = row.querySelector('[data-act="ban"]');
       const renderBan = () => {
@@ -1993,15 +2087,15 @@ async function openAdminModal() {
             u.banned = false;
             showToast("Unbanned");
           } else {
-            const reason = prompt("Ban reason (optional):") || undefined;
-            const daysRaw = (prompt("Suspend for how many days? Leave blank for permanent.") || "").trim();
+            const reason = (await uiPrompt("Ban reason (optional):")) || undefined;
+            const daysRaw = ((await uiPrompt("Suspend for how many days? Leave blank for permanent.")) || "").trim();
             const days = daysRaw ? Number(daysRaw) : undefined;
             await api("/admin/ban", { method: "POST", body: JSON.stringify({ userId: u.id, reason, days }) });
             u.banned = true;
             showToast("Banned");
           }
           renderBan(); renderSub();
-        } catch (e) { alert(e.message); }
+        } catch (e) { showToast(e.message); }
       });
       body.appendChild(row);
     });
@@ -2026,16 +2120,16 @@ async function openAdminModal() {
           try {
             await api(`/admin/reports/${r.id}/resolve`, { method: "POST", body: JSON.stringify({ status: "DISMISSED" }) });
             renderSub("DISMISSED"); actions.innerHTML = ""; showToast("Dismissed");
-          } catch (e) { alert(e.message); }
+          } catch (e) { showToast(e.message); }
         });
         const ban = document.createElement("button");
         ban.className = "ghost danger"; ban.type = "button"; ban.textContent = "Ban user";
         ban.addEventListener("click", async () => {
           try {
-            const reason = prompt("Ban reason (optional):") || undefined;
+            const reason = (await uiPrompt("Ban reason (optional):")) || undefined;
             await api("/admin/ban", { method: "POST", body: JSON.stringify({ userId: r.targetId, reason }) });
             renderSub("ACTIONED"); actions.innerHTML = ""; showToast("User banned");
-          } catch (e) { alert(e.message); }
+          } catch (e) { showToast(e.message); }
         });
         actions.append(dismiss, ban);
       }
@@ -2071,8 +2165,8 @@ function urlB64ToUint8Array(base64) {
   return arr;
 }
 qs("enablePushBtn").addEventListener("click", async () => {
-  if (!state.config.vapidPublicKey) return alert("Push not configured on the server.");
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return alert("Push not supported on this device.");
+  if (!state.config.vapidPublicKey) return showToast("Push not configured on the server.");
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return showToast("Push not supported on this device.");
   const perm = await Notification.requestPermission();
   if (perm !== "granted") return;
   const reg = await navigator.serviceWorker.ready;
@@ -2112,13 +2206,13 @@ function renderCompanyVerifyRow() {
   }
 }
 qs("companyVerifyBtn")?.addEventListener("click", async () => {
-  const email = prompt("Enter your work email (not a free provider like gmail):");
+  const email = await uiPrompt("Enter your work email (not a free provider like gmail):", { placeholder: "you@company.com" });
   if (!email) return;
   try {
     const r = await api("/me/company-email", { method: "POST", body: JSON.stringify({ email: email.trim() }) });
     if (r.verifyUrl) {
       // Dev mode: no real email sent — surface the link so the flow completes.
-      if (confirm("Dev mode: open the verification link now?")) { location.href = r.verifyUrl; return; }
+      if (await uiConfirm("Dev mode: open the verification link now?")) { location.href = r.verifyUrl; return; }
     }
     showToast("Verification email sent to your work address");
   } catch (e) { showToast(e.message); }
@@ -2140,7 +2234,7 @@ function renderTwoFactorRow() {
 }
 qs("twoFactorBtn")?.addEventListener("click", async () => {
   if (state.user?.twoFactorEnabled) {
-    const code = prompt("Enter a current 2FA or recovery code to disable two-factor auth:");
+    const code = await uiPrompt("Enter a current 2FA or recovery code to disable two-factor auth:", { placeholder: "123456" });
     if (!code) return;
     try {
       await api("/me/2fa/disable", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
@@ -2152,13 +2246,13 @@ qs("twoFactorBtn")?.addEventListener("click", async () => {
   }
   try {
     const setup = await api("/me/2fa/setup", { method: "POST" });
-    alert(`Add this secret to your authenticator app (Google Authenticator, 1Password, etc.):\n\n${setup.secret}\n\nOr use this otpauth URL:\n${setup.otpauthUrl}`);
-    const code = prompt("Enter the 6-digit code from your authenticator to finish enabling 2FA:");
+    await uiAlert("Add this secret to your authenticator app (Google Authenticator, 1Password, etc.), or use the otpauth URL below:", { pre: `${setup.secret}\n\n${setup.otpauthUrl}` });
+    const code = await uiPrompt("Enter the 6-digit code from your authenticator to finish enabling 2FA:", { placeholder: "123456" });
     if (!code) return;
     const r = await api("/me/2fa/enable", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
     if (state.user) state.user.twoFactorEnabled = true;
     renderTwoFactorRow();
-    alert(`Two-factor auth is on. Save these one-time recovery codes somewhere safe — each works once if you lose your device:\n\n${(r.recoveryCodes || []).join("\n")}`);
+    await uiAlert("Two-factor auth is on. Save these one-time recovery codes somewhere safe — each works once if you lose your device:", { pre: (r.recoveryCodes || []).join("\n") });
     showToast("Two-factor auth enabled");
   } catch (e) { showToast(e.message); }
 });

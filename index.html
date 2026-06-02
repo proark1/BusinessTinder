@@ -619,6 +619,19 @@
       </div>
     </div>
 
+    <div id="promptModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
+      <div class="modal-card glass pad" style="max-width:440px;">
+        <h3 id="promptModalTitle"></h3>
+        <p id="promptModalMsg" class="hint" hidden></p>
+        <pre id="promptModalPre" class="prompt-pre" hidden></pre>
+        <input id="promptModalInput" type="text" hidden autocomplete="off" />
+        <div class="modal-actions">
+          <button class="ghost" id="promptModalCancel" type="button">Cancel</button>
+          <button class="primary" id="promptModalOk" type="button">OK</button>
+        </div>
+      </div>
+    </div>
+
     <script src="script.js" type="module"></script>
     <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");</script>
   </body>

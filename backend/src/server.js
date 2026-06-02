@@ -1747,6 +1747,9 @@ app.post('/conversations/:conversationId/read', auth, async (req, res) => {
       if (m.conversationId === conversationId && m.senderId !== req.user.userId) m.status = 'READ';
     });
   }
+  // Let the other party update their "Read" receipts live.
+  const otherId = await otherUserInConversation(req.user.userId, conversationId);
+  if (otherId) sendToUser(otherId, { type: 'read', conversationId, at: new Date().toISOString() });
   res.json({ ok: true });
 });
 
@@ -2545,16 +2548,24 @@ wss.on('connection', (ws, req) => {
 
       if (data.type === 'read_message') {
         const { messageId } = data;
+        let senderId = null;
+        let conversationId = null;
         if (prisma) {
           const msg = await prisma.message.findUnique({ where: { id: messageId } });
           if (!msg || !(await canAccessConversation(userId, msg.conversationId))) return;
           await prisma.message.update({ where: { id: messageId }, data: { status: 'READ' } });
+          senderId = msg.senderId; conversationId = msg.conversationId;
         } else {
           const msg = mem.messages.find((m) => m.id === messageId);
           if (!msg || !(await canAccessConversation(userId, msg.conversationId))) return;
           msg.status = 'READ';
+          senderId = msg.senderId; conversationId = msg.conversationId;
         }
         ws.send(JSON.stringify({ type: 'read_ack', messageId }));
+        // Notify the author so their "Read" receipt updates live.
+        if (senderId && senderId !== userId) {
+          sendToUser(senderId, { type: 'read', conversationId, messageId, at: new Date().toISOString() });
+        }
       }
     });
 
